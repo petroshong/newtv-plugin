@@ -229,7 +229,7 @@ function patchFiles(patch) {
 // attached, so it can talk it through; Cursor can't attach data to a prompt,
 // so there the answer is shown directly. Neither is broadcast.
 const CONTROLS = { off: 'off', pause: 'off', stop: 'off', on: 'on', resume: 'on', start: 'on', status: 'status', settings: 'status', link: 'link', private: 'private', public: 'public', join: 'join', leave: 'leave', local: 'local', help: 'help',
-  member: 'member', payouts: 'payouts', tips: 'tips', tip: 'tips', subs: 'subs', sub: 'subs', subscriptions: 'subs', social: 'social', links: 'social', socials: 'social', viewers: 'viewers', who: 'viewers', kick: 'kick', remove: 'kick', ban: 'ban', bans: 'bans', unban: 'unban', contact: 'contact', sponsor: 'sponsor', share: 'share', hide: 'hide', unhide: 'unhide', agents: 'agents', comments: 'comments' }
+  member: 'member', payouts: 'payouts', tips: 'tips', tip: 'tips', subs: 'subs', sub: 'subs', subscriptions: 'subs', social: 'social', links: 'social', socials: 'social', viewers: 'viewers', who: 'viewers', kick: 'kick', remove: 'kick', ban: 'ban', bans: 'bans', unban: 'unban', contact: 'contact', sponsor: 'sponsor', redact: 'redact', share: 'share', hide: 'hide', unhide: 'unhide', agents: 'agents', comments: 'comments' }
 const EXPLORE = new Set(['live', 'watch', 'search', 'learn'])
 const CHAT_COMMAND = /^\s*\/?newtv(?:\s+([a-z]+)\b([\s\S]*))?$/i
 const LAST_LIST = join(HOME_DIR, 'last-list.json') // what `newtv watch 2` refers to
@@ -300,7 +300,7 @@ async function controlCommand({ cmd, rest }, state) {
     args = [words[0], words.slice(1).join(' ')]
   }
   if (['local', 'kick', 'ban', 'unban', 'share', 'agents', 'comments'].includes(cmd)) args = rest.split(/\s+/).filter(Boolean).slice(0, 1)
-  if (['contact', 'hide', 'unhide', 'sponsor'].includes(cmd)) args = rest.trim() ? [rest.trim()] : []
+  if (['contact', 'hide', 'unhide', 'sponsor', 'redact'].includes(cmd)) args = rest.trim() ? [rest.trim()] : []
   if (['member', 'payouts', 'social'].includes(cmd)) args = rest.split(/\s+/).filter(Boolean).slice(0, 2)
   if (['tips', 'subs'].includes(cmd)) args = rest ? [rest] : []
   const said = []
@@ -392,6 +392,7 @@ const HELP = [
   '  newtv comments subscribers / on / off   whose comments reach your agent (default: subscribers and tippers)',
   '  newtv contact <how>     show viewers how to reach you (newtv contact off)',
   '  newtv sponsor <name>    share your latest session with a sponsor (shown on it; they only watch); newtv sponsor off',
+  '  newtv redact            hide the last step from everyone, for good (newtv redact 7: step 7)',
   '  newtv social github me  your links on your broadcasts: x, github, linkedin, bluesky, youtube, discord, website',
   '  newtv local on / off    keep full sessions only on this machine',
   'Your viewers',
@@ -542,6 +543,18 @@ async function hook() {
     clearState()
   }
 
+  // Commands whose output can hold secrets that no pattern would recognize:
+  // reading secret files, dumping the environment, echoing a secret variable,
+  // and CLIs that print tokens. Their output is never broadcast.
+  function printsSecrets(command) {
+    const c = String(command ?? '')
+    const READS = /\b(cat|less|more|head|tail|bat|type|grep|rg|awk|sed|strings|xxd|od|jq|yq|base64|openssl|cp|scp)\b/
+    const SECRET_FILES = /(\.env\b|\.env\.|\.pem\b|\.key\b|\.p12\b|\.pfx\b|\.keystore\b|id_(rsa|ed25519|ecdsa|dsa)\b|credentials|secrets?\b|\.npmrc|\.netrc|\.pgpass|kubeconfig|\.kube\/config|\.aws\/|\.ssh\/|\.docker\/config\.json|service[-_]?account[^\s]*\.json|\.git-credentials|auth\.json|token)/i
+    return (READS.test(c) && SECRET_FILES.test(c))
+      || /(^|[;&|]\s*)(printenv|env|set|export -p|declare -x|compgen -v)\s*($|[;&|>])/.test(c)
+      || /\b(echo|printf|print)\b[^;&|]*\$\{?[A-Z0-9_]*(KEY|TOKEN|SECRET|PASS|PWD|AUTH|CRED|DSN|WEBHOOK)[A-Z0-9_]*/i.test(c)
+      || /\bgh auth (token|status\b.*--show-token)|\baws (configure (get|list|export-credentials)|sts get-session-token|ecr get-login-password)|\bgcloud auth (print-access-token|print-identity-token|application-default print-access-token)|\baz account get-access-token|\bheroku auth:token|\b(netlify env:(list|get)|vercel env (pull|ls))|\b(fly|flyctl) (auth token|tokens create)|\bdoctl auth\b|\bstripe config --list|\bop (read|item get)\b|\bvault (read|kv get)\b|\bsecurity find-(generic|internet)-password|\bkubectl (get|describe) secrets?\b|\bnpm token\b|\bgit (credential fill|config [^;&|]*credential)|\b(supabase|railway|render|doppler) (secrets|variables|env)\b/i.test(c)
+  }
   function stepFor(tool, inp = {}, out = {}) {
     const output = (o) => scrub(typeof o === 'string' ? o : [o?.stdout, o?.stderr, o?.output].filter(Boolean).join('\n'), 2000)
     // Other agents' names for the same tools (Codex, Cursor).
@@ -551,8 +564,8 @@ async function hook() {
       case 'Bash': {
         inp = { ...inp, command: [].concat(inp.command ?? inp.cmd ?? '').join(' ') }
         if (/newtv-hook\.mjs["']?\s+playbook\b/.test(inp.command ?? '')) return { type: 'decision', text: 'Shared a playbook for other agents' }
-        // A command that prints a secret file shows only that it ran.
-        const showsSecret = /\b(cat|less|more|head|tail|bat|type|printenv|env)\b/.test(inp.command ?? '') && /(\.env|\.pem|\.key|credentials|secrets?\b|printenv|\benv\b)/.test(inp.command ?? '')
+        // A command that can print secrets shows only that it ran.
+        const showsSecret = printsSecrets(inp.command)
         // Claude Code sends failed commands as PostToolUseFailure, so a command here
         // succeeded unless it was interrupted. Test runs are marked as tests.
         const isTestRun = /\b(npm|pnpm|yarn|bun)\s+(run\s+)?test\b|\b(pytest|jest|vitest|mocha|playwright test|go test|cargo test|rspec|phpunit|node --test)\b|\bpython3? -m (unittest|pytest)\b/.test(inp.command ?? '')
@@ -660,6 +673,8 @@ async function hook() {
       notes.push(`This task is being broadcast on NewTV (${who}). Watch link, if the user asks for it: ${s.watch}. If the user wants to stop broadcasting, they can type \`newtv off\` as a message (\`newtv help\` lists the rest).`)
       // Public sessions become playbooks; one the agent writes saves NewTV writing it.
       if (isPublic) notes.push(`If this task teaches something another agent could reuse, end by sharing a short playbook: pipe JSON {"title","summary","steps":[...],"pitfalls":[...],"tags":[...]} to \`node "${fileURLToPath(import.meta.url)}" playbook ${s.id}\`. No secrets, personal data or private paths.`)
+      // What no pattern can catch, the agent can: hide what it just showed.
+      notes.push(`You're on camera. If anything you show may contain a secret or personal information NewTV wouldn't recognize (in plain words, an unusual format, a screenshot of a keys or settings page), right after it run \`node "${fileURLToPath(import.meta.url)}" redact last\` and tell the user; if a real key was shown, they should rotate it.`)
       if (s.event_note) notes.push(`Tell the user briefly: ${s.event_note}`)
       if (s.event) notes.push(`It's part of the event "${s.event.name}" as team "${s.event.team}": the event's organizers${s.event.sponsors?.length ? ` and sponsors (${s.event.sponsors.join(', ')})` : ''} can follow it.`)
       // Once, ever: tell the builder they can be paid for this (unless they've looked already).
@@ -1200,6 +1215,18 @@ async function command(cmd, args) {
       const r = await call(`/v1/runs/${b.id}/settings`, { sponsor: words.join(' ') }, b.key).catch(() => null)
       if (r?.status !== 200) throw new Error(r?.body?.error ?? 'Couldn\'t change sharing.')
       return console.log(`Session ${n} is shared with ${r.body.sponsors.join(', ')}: they can watch it (only watch), and it shows "Shared with" them to everyone. Stop with \`newtv sponsor off\`.`)
+    }
+    // Hide a step from everyone, for good: the last one (and its screenshot), or
+    // a number from the session. For what NewTV can't recognize as a secret.
+    //   newtv redact            the last step     newtv redact 7      step 7
+    case 'redact': {
+      const [which = 'last', ...why] = String(args[0] ?? 'last').trim().split(/\s+/)
+      const b = myRecent(1)[0]
+      if (!b) return console.log('Nothing broadcast yet.')
+      const n = /^\d+$/.test(which) ? String(Number(which) - 1) : 'last'
+      const r = await call(`/v1/broadcasts/${b.id}/steps/${n}/hide`, { reason: why.join(' ').slice(0, 200) }, b.key).catch(() => null)
+      if (r?.status !== 200) throw new Error(r?.body?.error ?? 'Couldn\'t hide that step.')
+      return console.log(`Hidden from everyone: ${r.body.hidden.length > 1 ? 'the last step and its screenshot' : n === 'last' ? 'the last step' : `step ${which}`}. Its content is gone from NewTV. If it showed a real key, rotate it with its provider.`)
     }
     case 'contact': {
       if (!args[0]) return console.log(config.contact ? `Viewers see how to reach you: ${config.contact}. \`newtv contact off\` removes it.` : 'Your broadcasts show no contact details. Add some with `newtv contact you@example.com` (or a link or handle).')
