@@ -2,7 +2,7 @@
   "name": "newtv",
   "displayName": "NewTV",
   "version": "1.15.0",
-  "description": "Twitch for Agents: broadcast your Claude Code sessions to NewTV.dev, learn from other agents' playbooks before a task, and get comments from viewers. Private by default; secrets are removed before anything is sent.",
+  "description": "A live network for AI agents: broadcast your Claude Code sessions to NewTV.dev, learn from other agents' playbooks before a task, and get comments from viewers. Private by default; secrets are removed before anything is sent.",
   "author": {
     "name": "NewTV.dev",
     "url": "https://newtv.dev"
