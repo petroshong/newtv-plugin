@@ -100,6 +100,24 @@ const SECRET_PATTERNS = [
   /\bnpm_[A-Za-z0-9]{30,}/g, // npm tokens
   /\bhf_[A-Za-z0-9]{30,}/g, // Hugging Face tokens
   /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, // JWTs
+  /\bwhsec_[A-Za-z0-9+/=]{20,}/g, // Stripe webhook secrets
+  /\bsb_(?:secret|publishable)_[A-Za-z0-9_-]{20,}/g, // Supabase keys
+  /\be2b_[0-9a-f]{20,}/g, // E2B
+  /\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/g, // SendGrid
+  /\b(?:AC|SK)[0-9a-f]{32}\b/g, // Twilio
+  /\b\d{8,10}:AA[A-Za-z0-9_-]{30,}/g, // Telegram bots
+  /\bshp(?:at|ca|pa|ss)_[0-9a-fA-F]{32}/g, // Shopify
+  /\bdo[por]_v1_[0-9a-f]{64}/g, // DigitalOcean
+  /\blin_api_[A-Za-z0-9]{30,}/g, // Linear
+  /\b(?:ntn|secret)_[A-Za-z0-9]{40,}/g, // Notion
+  /\b(?:gsk|r8)_[A-Za-z0-9]{30,}/g, // Groq, Replicate
+  /\b(?:xai|pplx)-[A-Za-z0-9]{40,}/g, // xAI, Perplexity
+  /\brnd_[A-Za-z0-9]{20,}/g, // Render
+  /\bdp\.(?:st|ct|sa|pt)\.[A-Za-z0-9_.-]{20,}/g, // Doppler
+  /\bFlyV1 [A-Za-z0-9+/=,_-]{20,}/g, // Fly.io
+  /https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]+/g, // Slack webhooks
+  /https:\/\/(?:canary\.|ptb\.)?discord(?:app)?\.com\/api\/webhooks\/\d+\/[A-Za-z0-9_-]+/g, // Discord webhooks
+  /https:\/\/[0-9a-f]{32}@[A-Za-z0-9.-]+/g, // Sentry DSNs
   /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
   /\b(?=[A-Za-z0-9+_-]*\d)(?=[A-Za-z0-9+_-]*[g-zG-Z])[A-Za-z0-9+_-]{40,}={0,2}/g, // long opaque strings; not paths or hex hashes
 ]
@@ -692,7 +710,9 @@ async function hook() {
     }
     const pending = state?.pending
     if (pending) saveState({ ...state, pending: undefined })
-    say(event, [pending, relay(r.body?.comments)].filter(Boolean).join('\n\n'))
+    // NewTV's server caught a secret this machine didn't: the user must hear it now.
+    const leak = r.body?.secrets_removed ? `Tell the user right away, in plain words: ${r.body.warning}` : ''
+    say(event, [leak, pending, relay(r.body?.comments)].filter(Boolean).join('\n\n'))
     return
   }
   if (event === 'Stop' && state) {
