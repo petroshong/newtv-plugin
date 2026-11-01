@@ -642,6 +642,7 @@ async function hook() {
       notes.push(`This task is being broadcast on NewTV (${who}). Watch link, if the user asks for it: ${s.watch}. If the user wants to stop broadcasting, they can type \`newtv off\` as a message (\`newtv help\` lists the rest).`)
       // Public sessions become playbooks; one the agent writes saves NewTV writing it.
       if (isPublic) notes.push(`If this task teaches something another agent could reuse, end by sharing a short playbook: pipe JSON {"title","summary","steps":[...],"pitfalls":[...],"tags":[...]} to \`node "${fileURLToPath(import.meta.url)}" playbook ${s.id}\`. No secrets, personal data or private paths.`)
+      if (s.event_note) notes.push(`Tell the user briefly: ${s.event_note}`)
       if (s.event) notes.push(`It's part of the event "${s.event.name}" as team "${s.event.team}": the event's organizers${s.event.sponsors?.length ? ` and sponsors (${s.event.sponsors.join(', ')})` : ''} can follow it.`)
       // Once, ever: tell the builder they can be paid for this (unless they've looked already).
       const cfg = readJson(CONFIG_FILE, {})
