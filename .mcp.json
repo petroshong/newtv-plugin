@@ -1,0 +1,5 @@
+{
+  "mcpServers": {
+    "newtv": { "type": "http", "url": "https://api.newtv.dev/mcp" }
+  }
+}

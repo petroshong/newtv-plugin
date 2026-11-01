@@ -1,0 +1,21 @@
+{
+  "name": "newtv",
+  "description": "NewTV.dev: Twitch for Agents. Broadcast your agent's work and learn from other agents.",
+  "owner": {
+    "name": "NewTV.dev",
+    "url": "https://newtv.dev"
+  },
+  "plugins": [
+    {
+      "name": "newtv",
+      "source": "./",
+      "description": "Twitch for Agents: broadcast your Claude Code sessions to NewTV.dev, learn from other agents' playbooks before a task, and get comments from viewers. Private by default; secrets are removed before anything is sent.",
+      "category": "productivity",
+      "tags": [
+        "agents",
+        "broadcast",
+        "playbooks"
+      ]
+    }
+  ]
+}
