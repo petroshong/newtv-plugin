@@ -229,7 +229,7 @@ function patchFiles(patch) {
 // attached, so it can talk it through; Cursor can't attach data to a prompt,
 // so there the answer is shown directly. Neither is broadcast.
 const CONTROLS = { off: 'off', pause: 'off', stop: 'off', on: 'on', resume: 'on', start: 'on', status: 'status', settings: 'status', link: 'link', private: 'private', public: 'public', join: 'join', leave: 'leave', local: 'local', help: 'help',
-  member: 'member', payouts: 'payouts', tips: 'tips', tip: 'tips', subs: 'subs', sub: 'subs', subscriptions: 'subs', social: 'social', links: 'social', socials: 'social', viewers: 'viewers', who: 'viewers', kick: 'kick', remove: 'kick', ban: 'ban', bans: 'bans', unban: 'unban', contact: 'contact', sponsor: 'sponsor', redact: 'redact', share: 'share', hide: 'hide', unhide: 'unhide', agents: 'agents', comments: 'comments' }
+  member: 'member', payouts: 'payouts', tips: 'tips', tip: 'tips', subs: 'subs', sub: 'subs', subscriptions: 'subs', social: 'social', links: 'social', socials: 'social', viewers: 'viewers', who: 'viewers', kick: 'kick', remove: 'kick', ban: 'ban', bans: 'bans', unban: 'unban', contact: 'contact', sponsor: 'sponsor', redact: 'redact', follow: 'follow', unfollow: 'unfollow', following: 'following', followers: 'followers', share: 'share', hide: 'hide', unhide: 'unhide', agents: 'agents', comments: 'comments' }
 const EXPLORE = new Set(['live', 'watch', 'search', 'learn'])
 const CHAT_COMMAND = /^\s*\/?newtv(?:\s+([a-z]+)\b([\s\S]*))?$/i
 const LAST_LIST = join(HOME_DIR, 'last-list.json') // what `newtv watch 2` refers to
@@ -300,7 +300,7 @@ async function controlCommand({ cmd, rest }, state) {
     args = [words[0], words.slice(1).join(' ')]
   }
   if (['local', 'kick', 'ban', 'unban', 'share', 'agents', 'comments'].includes(cmd)) args = rest.split(/\s+/).filter(Boolean).slice(0, 1)
-  if (['contact', 'hide', 'unhide', 'sponsor', 'redact'].includes(cmd)) args = rest.trim() ? [rest.trim()] : []
+  if (['contact', 'hide', 'unhide', 'sponsor', 'redact', 'follow', 'unfollow'].includes(cmd)) args = rest.trim() ? [rest.trim()] : []
   if (['member', 'payouts', 'social'].includes(cmd)) args = rest.split(/\s+/).filter(Boolean).slice(0, 2)
   if (['tips', 'subs'].includes(cmd)) args = rest ? [rest] : []
   const said = []
@@ -324,11 +324,14 @@ const linksText = (links) => (links?.length ? `\n   Builder: ${links.map((l) => 
 async function exploreCommand({ cmd, rest }, family) {
   if (cmd === 'live') {
     const fam = Object.keys(FAMILY_NAMES).find((f) => f === rest.toLowerCase() || FAMILY_NAMES[f].toLowerCase() === rest.toLowerCase())
-    const { live } = await getJson(`/v1/live${fam ? `?family=${fam}` : ''}`)
+    const { live: all } = await getJson(`/v1/live${fam ? `?family=${fam}` : ''}`)
+    // Builders you follow come first, marked ★.
+    const mine = new Set(readJson(CONFIG_FILE, {}).following ?? [])
+    const live = [...all.filter((r) => mine.has(r.agent?.handle)), ...all.filter((r) => !mine.has(r.agent?.handle))]
     if (live.length) {
       remember(live.slice(0, 8).map((r) => r.id))
       return [`Live on NewTV now${fam ? ` (${FAMILY_NAMES[fam]} agents)` : ''}:`, ...live.slice(0, 8).map((r, i) =>
-        `${i + 1}. ${r.goal.slice(0, 100)} | ${who(r.agent)}, ${r.stepCount} steps${r.watching ? `, ${r.watching} watching` : ''}${r.lastStep ? `\n   Now: ${r.lastStep.slice(0, 120)}` : ''}${linksText(r.links)}\n   https://newtv.dev/#/watch/${r.id}`),
+        `${i + 1}. ${mine.has(r.agent?.handle) ? '★ ' : ''}${r.goal.slice(0, 100)} | ${who(r.agent)}, ${r.stepCount} steps${r.watching ? `, ${r.watching} watching` : ''}${r.lastStep ? `\n   Now: ${r.lastStep.slice(0, 120)}` : ''}${linksText(r.links)}\n   https://newtv.dev/#/watch/${r.id}`),
       '', 'Type `newtv watch 1` to see a session\'s latest steps.'].join('\n')
     }
     const { runs } = await getJson(`/v1/runs${fam ? `?family=${fam}` : ''}`)
@@ -393,6 +396,7 @@ const HELP = [
   '  newtv contact <how>     show viewers how to reach you (newtv contact off)',
   '  newtv sponsor <name>    share your latest session with a sponsor (shown on it; they only watch); newtv sponsor off',
   '  newtv redact            hide the last step from everyone, for good (newtv redact 7: step 7)',
+  '  newtv follow <handle>   follow a builder (newtv unfollow, newtv following, newtv followers)',
   '  newtv social github me  your links on your broadcasts: x, github, linkedin, bluesky, youtube, discord, website',
   '  newtv local on / off    keep full sessions only on this machine',
   'Your viewers',
@@ -1227,6 +1231,32 @@ async function command(cmd, args) {
       const r = await call(`/v1/broadcasts/${b.id}/steps/${n}/hide`, { reason: why.join(' ').slice(0, 200) }, b.key).catch(() => null)
       if (r?.status !== 200) throw new Error(r?.body?.error ?? 'Couldn\'t hide that step.')
       return console.log(`Hidden from everyone: ${r.body.hidden.length > 1 ? 'the last step and its screenshot' : n === 'last' ? 'the last step' : `step ${which}`}. Its content is gone from NewTV. If it showed a real key, rotate it with its provider.`)
+    }
+    // Following builders: the list stays here; NewTV only counts followers.
+    case 'follow':
+    case 'unfollow': {
+      const handle = String(args[0] ?? '').trim().replace(/^@/, '').replace(/^.*#\/agent\//, '').toLowerCase()
+      if (!/^[a-z0-9-]{2,40}$/.test(handle)) return console.log(`Type \`newtv ${cmd} <handle>\`, like \`newtv ${cmd} petros-test\` (the handle is on the builder's page).`)
+      const r = await fetch(`${API}/v1/agents/${handle}/follow`, { method: cmd === 'follow' ? 'POST' : 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ client: clientId() }), signal: AbortSignal.timeout(TIMEOUT_MS) }).then(async (x) => ({ status: x.status, body: await x.json().catch(() => ({})) })).catch(() => null)
+      if (r?.status !== 200) throw new Error(r?.body?.error ?? `Couldn't ${cmd} @${handle}.`)
+      const c = readJson(CONFIG_FILE, {})
+      const list = (c.following ?? []).filter((h) => h !== handle)
+      saveConfig({ ...c, following: cmd === 'follow' ? [...list, handle].slice(-200) : list })
+      return console.log(cmd === 'follow' ? `Following @${handle}. \`newtv live\` shows them first (★), and \`newtv following\` shows what they're doing.` : `Unfollowed @${handle}.`)
+    }
+    case 'following': {
+      const list = readJson(CONFIG_FILE, {}).following ?? []
+      if (!list.length) return console.log('You don\'t follow anyone yet. `newtv follow <handle>` (the handle is on a builder\'s page).')
+      const d = await getJson(`/v1/following?handles=${encodeURIComponent(list.join(','))}`).catch(() => ({ live: [], recent: [] }))
+      remember([...d.live, ...d.recent].slice(0, 8).map((r) => r.id))
+      const rows = [...d.live.map((r) => ({ ...r, live: true })), ...d.recent].slice(0, 8).map((r, i) => `${i + 1}. ${r.live ? 'LIVE ' : ''}${String(r.goal).slice(0, 90)} | ${who(r.agent)}${r.live ? '' : `, ${ago(r.startedAt)}`}`)
+      return console.log([`You follow: ${list.map((h) => `@${h}`).join(', ')}`, ...(rows.length ? ['', ...rows, '', '`newtv watch 1` to see a session\'s latest steps.'] : ['Nothing public from them yet.'])].join('\n'))
+    }
+    case 'followers': {
+      const handle = readJson(CONFIG_FILE, {}).handle
+      if (!handle) return console.log('Followers are counted for registered builders: `newtv payouts` or `newtv social` registers you.')
+      const d = await getJson(`/v1/agents/${handle}`).catch(() => null)
+      return console.log(`@${handle} has ${d?.stats?.followers ?? 0} follower${d?.stats?.followers === 1 ? '' : 's'}. NewTV only counts them; nobody can see who follows whom. Your page: https://newtv.dev/#/agent/${handle}`)
     }
     case 'contact': {
       if (!args[0]) return console.log(config.contact ? `Viewers see how to reach you: ${config.contact}. \`newtv contact off\` removes it.` : 'Your broadcasts show no contact details. Add some with `newtv contact you@example.com` (or a link or handle).')
