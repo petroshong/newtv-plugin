@@ -25,7 +25,7 @@
 // Events:    node newtv-hook.mjs join <EVENT-CODE> "Team name" ["Your name"] | leave
 // Setup:     node newtv-hook.mjs setup [<EVENT-CODE> "Team name" ["Your name"]]  (every agent found here)
 
-import { readFileSync, writeFileSync, rmSync, mkdirSync, existsSync, readdirSync, appendFileSync, copyFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, rmSync, mkdirSync, existsSync, readdirSync, appendFileSync, copyFileSync, openSync, readSync, closeSync, statSync } from 'node:fs'
 import { tmpdir, homedir } from 'node:os'
 import { basename, join, relative, isAbsolute, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -209,6 +209,78 @@ function codexExitCode(transcript, id) {
     }
   } catch {}
   return undefined
+}
+
+// What the agent said just before a tool call: its reasoning, in its own words
+// ("It's an ESP32 on /dev/cu.usbmodem1101. Let me dump its boot code."). Read
+// from the session's transcript (Claude Code or Codex), so viewers and other
+// agents see why each step was taken, not only what ran.
+function narrationFor(transcript, toolId) {
+  if (!transcript || !toolId) return ''
+  try {
+    const size = statSync(transcript).size
+    const read = (bytes) => {
+      const n = Math.min(size, bytes)
+      const buf = Buffer.alloc(n)
+      const fd = openSync(transcript, 'r')
+      try {
+        readSync(fd, buf, 0, n, size - n)
+      } finally {
+        closeSync(fd)
+      }
+      return buf.toString('utf8')
+    }
+    let text = read(2_000_000)
+    if (!text.includes(toolId)) text = read(60_000_000)
+    // The session as a list: text the agent wrote, tool calls, and user prompts.
+    const blocks = []
+    for (const line of text.split('\n')) {
+      if (!line.startsWith('{')) continue
+      let e
+      try {
+        e = JSON.parse(line)
+      } catch {
+        continue
+      }
+      if (e.type === 'assistant') {
+        for (const c of e.message?.content ?? []) {
+          if (c.type === 'text' && c.text?.trim()) blocks.push({ text: c.text.trim() })
+          if (c.type === 'tool_use') blocks.push({ tool: c.id })
+        }
+      } else if (e.type === 'user' && typeof e.message?.content === 'string') blocks.push({ prompt: true })
+      else if (e.type === 'response_item') { // Codex
+        const it = e.payload ?? {}
+        if (it.type === 'message' && it.role === 'assistant') {
+          const t = (it.content ?? []).map((c) => c.text ?? '').join('\n').trim()
+          if (t) blocks.push({ text: t })
+        } else if (it.type === 'message' && it.role === 'user') blocks.push({ prompt: true })
+        else if (it.call_id) blocks.push({ tool: it.call_id })
+      }
+    }
+    const at = blocks.findLastIndex((b) => b.tool === toolId)
+    if (at < 0) return ''
+    const said = []
+    for (let i = at - 1; i >= 0 && !blocks[i].tool && !blocks[i].prompt; i--) if (blocks[i].text) said.unshift(blocks[i].text)
+    return said.join('\n\n')
+  } catch {
+    return ''
+  }
+}
+
+// An image in the project that the agent looked at (a render, a chart, a
+// screenshot it made), so viewers see it too. Never one outside the project
+// (pasted screenshots live elsewhere) or a hidden or secret-looking file.
+function projectImage(file, cwd) {
+  try {
+    if (!file || !/\.(png|jpe?g|gif|webp)$/i.test(file)) return null
+    const abs = resolve(cwd, file)
+    const r = relative(cwd, abs).replaceAll('\\', '/')
+    if (!r || r.startsWith('..') || isAbsolute(r) || isHidden(r) || SECRET_FILE.test(r)) return null
+    if (statSync(abs).size > 2_500_000) return null
+    return readFileSync(abs).toString('base64')
+  } catch {
+    return null
+  }
 }
 
 // The files in an apply_patch patch: *** Add File / Update File / Delete File.
@@ -448,6 +520,7 @@ function forSharing(step, level) {
   if (level === 'steps') {
     delete out.output
     delete out.input
+    delete out.screenshot
     if (out.files) out.files = out.files.map(({ diff, ...f }) => f)
   }
   return out
@@ -509,7 +582,7 @@ async function hook() {
     ].join('\n') } }))
     return
   }
-  if (readJson(CONFIG_FILE, {}).off === true || process.env.NEWTV_OFF === '1') return
+  if ((readJson(CONFIG_FILE, {}).off === true && process.env.NEWTV_REPLAY !== '1') || process.env.NEWTV_OFF === '1') return
   // Project-relative, with forward slashes on every OS (Windows paths use backslashes).
   const rel = (p) => {
     if (!p) return ''
@@ -631,6 +704,7 @@ async function hook() {
         return { type: 'decision', text: `Planned: ${scrub((inp.todos ?? []).map((t) => t.content).join('; '), 400)}` }
       default:
         if (/^mcp__newtv/i.test(tool)) return null // don't broadcast the broadcasting
+        if (/^(ToolSearch|TaskStop|TaskOutput|TaskCreate|TaskUpdate|TaskList|AskUserQuestion|Monitor|ScheduleWakeup|SendUserFile|Skill|ReadNotifications|PushNotification|EnterPlanMode|ExitPlanMode)$/.test(tool)) return null // the agent's own housekeeping
         return { type: 'action', text: `Used ${scrub(tool, 80)}` } // other tools' arguments may be private: name only
     }
   }
@@ -741,9 +815,14 @@ async function hook() {
       step.ok = false
       step.output = scrub(input.error, 2000)
     }
+    // Why the agent took this step, in its words, goes first.
+    const why = scrub(narrationFor(input.transcript_path, input.tool_use_id), 1500)
+    const level = setting('NEWTV_SHARE', 'share') ?? 'full'
+    if (why) record(state.id, { type: 'step', step: { type: 'text', text: why } })
     record(state.id, { type: 'step', step })
-    const sent = forSharing(step, setting('NEWTV_SHARE', 'share') ?? 'full')
-    if (!sent) return // summary only: nothing per step
+    const image = input.tool_name === 'Read' && level === 'full' ? projectImage(input.tool_input?.file_path, cwd) : null
+    const sent = [why && forSharing({ type: 'text', text: why }, level), forSharing(image ? { ...step, screenshot: image } : step, level)].filter(Boolean)
+    if (!sent.length) return // summary only: nothing per step
     let r = await call(`/v1/broadcasts/${state.id}/steps`, sent, state.key)
     if (r.status === 409 || r.status === 404 || r.status === 413) {
       // The broadcast ended (idle for a long time, or full): continue in a new one.
@@ -1321,6 +1400,65 @@ async function command(cmd, args) {
       if (!handle) return console.log('Followers are counted for registered builders: `newtv payouts` or `newtv social` registers you.')
       const d = await getJson(`/v1/agents/${handle}`).catch(() => null)
       return console.log(`@${handle} has ${d?.stats?.followers ?? 0} follower${d?.stats?.followers === 1 ? '' : 's'}. NewTV only counts them; nobody can see who follows whom. Your page: https://newtv.dev/#/agent/${handle}`)
+    }
+    case 'replay': {
+      // replay <transcript.jsonl>: broadcast a past Claude Code session as one
+      // broadcast, as if NewTV had been on: requests as chapters, the agent's
+      // explanations, its commands and edits, its replies. Private by default.
+      const file = args.find((a) => !a.startsWith('--'))
+      if (!file || !existsSync(file)) throw new Error('Usage: replay <session.jsonl>  (Claude Code keeps them in ~/.claude/projects/<project>/)')
+      const lines = readFileSync(file, 'utf8').split('\n').filter((l) => l.startsWith('{')).map((l) => {
+        try {
+          return JSON.parse(l)
+        } catch {
+          return null
+        }
+      }).filter(Boolean)
+      const sid = `replay-${randomBytes(6).toString('hex')}`
+      const at = lines.find((e) => e.cwd)?.cwd ?? process.cwd()
+      const model = lines.find((e) => e.message?.model)?.message.model
+      const run = (event) => spawnSync(process.execPath, [self], { input: JSON.stringify({ session_id: sid, cwd: at, transcript_path: resolve(file), model, ...event }), env: { ...process.env, NEWTV_REPLAY: '1' }, encoding: 'utf8' })
+      const calls = new Map() // tool_use id -> { name, input }
+      let reply = ''
+      let prompts = 0
+      let tools = 0
+      const endTurn = () => {
+        if (prompts) run({ hook_event_name: 'Stop', last_assistant_message: reply })
+        reply = ''
+      }
+      for (const e of lines) {
+        if (e.isSidechain) continue
+        const content = e.message?.content
+        if (e.type === 'assistant') {
+          for (const c of content ?? []) {
+            if (c.type === 'tool_use') calls.set(c.id, { name: c.name, input: c.input })
+            if (c.type === 'text' && c.text?.trim()) reply = c.text.trim()
+          }
+        } else if (e.type === 'user') {
+          const results = Array.isArray(content) ? content.filter((c) => c.type === 'tool_result') : []
+          for (const r of results) {
+            const call = calls.get(r.tool_use_id)
+            if (!call) continue
+            const text = [].concat(r.content ?? []).map((c) => (typeof c === 'string' ? c : c.text ?? '')).join('\n')
+            tools++
+            run(r.is_error
+              ? { hook_event_name: 'PostToolUseFailure', tool_name: call.name, tool_input: call.input, tool_use_id: r.tool_use_id, error: text }
+              : { hook_event_name: 'PostToolUse', tool_name: call.name, tool_input: call.input, tool_use_id: r.tool_use_id, tool_response: e.toolUseResult ?? { stdout: text } })
+          }
+          if (results.length) continue
+          // A request from the person: its text, without NewTV's own commands or Claude Code's notices.
+          const prompt = (typeof content === 'string' ? content : (content ?? []).filter((c) => c.type === 'text').map((c) => c.text).join('\n')).trim()
+          if (!prompt || prompt.startsWith('<') || prompt.startsWith('[Request interrupted') || parseChatCommand(prompt)) continue
+          endTurn()
+          run({ hook_event_name: 'UserPromptSubmit', prompt })
+          prompts++
+        }
+      }
+      endTurn()
+      run({ hook_event_name: 'SessionEnd' })
+      const b = myBroadcasts().at(-1)
+      if (!prompts || !b) return console.log('Nothing to broadcast in that session.')
+      return console.log(`Broadcast ${prompts} requests and ${tools} steps as ${b.id} (${b.public ? 'public' : 'private'}):\n${b.watch}\nRename it: node ~/.newtv/newtv-hook.mjs title ${b.id} "…"`)
     }
     case 'title': {
       // title [<broadcast id>] "New title": that broadcast, or your latest.
