@@ -228,7 +228,7 @@ function patchFiles(patch) {
 // model. Exploring (live, watch, search) goes to the agent with the data
 // attached, so it can talk it through; Cursor can't attach data to a prompt,
 // so there the answer is shown directly. Neither is broadcast.
-const CONTROLS = { off: 'off', pause: 'off', stop: 'off', on: 'on', resume: 'on', start: 'on', status: 'status', settings: 'status', link: 'link', private: 'private', public: 'public', join: 'join', leave: 'leave', local: 'local', help: 'help',
+const CONTROLS = { off: 'off', pause: 'off', stop: 'off', end: 'off', on: 'on', resume: 'on', start: 'on', status: 'status', settings: 'status', link: 'link', private: 'private', public: 'public', join: 'join', leave: 'leave', local: 'local', help: 'help',
   member: 'member', payouts: 'payouts', tips: 'tips', tip: 'tips', subs: 'subs', sub: 'subs', subscriptions: 'subs', social: 'social', links: 'social', socials: 'social', viewers: 'viewers', who: 'viewers', kick: 'kick', remove: 'kick', ban: 'ban', bans: 'bans', unban: 'unban', contact: 'contact', sponsor: 'sponsor', redact: 'redact', follow: 'follow', unfollow: 'unfollow', following: 'following', followers: 'followers', category: 'category', top: 'top', share: 'share', hide: 'hide', unhide: 'unhide', agents: 'agents', comments: 'comments' }
 const EXPLORE = new Set(['live', 'watch', 'search', 'learn'])
 const CHAT_COMMAND = /^\s*\/?newtv(?:\s+([a-z]+)\b([\s\S]*))?$/i
@@ -984,6 +984,7 @@ async function command(cmd, args) {
         return
       }
       console.log(`\n${found.join('\n')}`)
+      console.log('\nNot live yet: sessions already open are not broadcast. NewTV starts with the next session you open.')
       console.log('\nIn your agent, type `newtv live` to see who is live, `newtv off` to pause, `newtv help` for the rest.')
       if (!code) console.log('Broadcasts are private: only someone with the link can watch.')
       console.log('By using NewTV you agree to its Terms (https://newtv.dev/terms) and Privacy Policy (https://newtv.dev/privacy). Remove it from every agent any time: node ~/.newtv/newtv-hook.mjs uninstall')
@@ -1367,6 +1368,13 @@ async function command(cmd, args) {
       console.log(`Agent: ${config.handle ? `@${config.handle}` : config.name ? `${config.name} (unregistered)` : 'named after the agent you use (unregistered)'}.`)
       for (const a of Object.keys(AGENTS)) {
         for (const f of new Set([AGENTS[a].file([]), AGENTS[a].file(['--project'])])) if (installedIn(f)) console.log(`Installed for ${AGENTS[a].label}: ${f}`)
+      }
+      {
+        // "Is this showing on NewTV?": the latest broadcasts, newest first.
+        const lines = existsSync(LOG_FILE) ? readFileSync(LOG_FILE, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []
+        console.log(lines.length ? '\nLatest broadcasts:' : '\nNo broadcasts yet.')
+        for (const b of lines.slice(-3).reverse()) console.log(`  ${ago(b.at)}  ${b.public ? 'public ' : 'private'}  ${b.project}: ${String(b.goal).slice(0, 60)}\n    ${b.watch}`)
+        console.log('A session is broadcast only if NewTV was set up before it started; then every prompt in it carries a note "This task is being broadcast on NewTV".')
       }
       return
     case 'list': {
