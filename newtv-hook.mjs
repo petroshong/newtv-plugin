@@ -228,7 +228,7 @@ function patchFiles(patch) {
 // model. Exploring (live, watch, search) goes to the agent with the data
 // attached, so it can talk it through; Cursor can't attach data to a prompt,
 // so there the answer is shown directly. Neither is broadcast.
-const CONTROLS = { off: 'off', pause: 'off', stop: 'off', end: 'off', on: 'on', resume: 'on', start: 'on', status: 'status', settings: 'status', link: 'link', private: 'private', public: 'public', join: 'join', leave: 'leave', local: 'local', help: 'help',
+const CONTROLS = { off: 'off', pause: 'off', stop: 'off', end: 'off', on: 'on', resume: 'on', start: 'on', status: 'status', settings: 'status', link: 'link', private: 'private', public: 'public', join: 'join', leave: 'leave', local: 'local', help: 'help', title: 'title', rename: 'title',
   member: 'member', payouts: 'payouts', tips: 'tips', tip: 'tips', subs: 'subs', sub: 'subs', subscriptions: 'subs', social: 'social', links: 'social', socials: 'social', viewers: 'viewers', who: 'viewers', kick: 'kick', remove: 'kick', ban: 'ban', bans: 'bans', unban: 'unban', contact: 'contact', sponsor: 'sponsor', redact: 'redact', follow: 'follow', unfollow: 'unfollow', following: 'following', followers: 'followers', category: 'category', top: 'top', share: 'share', hide: 'hide', unhide: 'unhide', agents: 'agents', comments: 'comments' }
 const EXPLORE = new Set(['live', 'watch', 'search', 'learn'])
 const CHAT_COMMAND = /^\s*\/?newtv(?:\s+([a-z]+)\b([\s\S]*))?$/i
@@ -290,6 +290,15 @@ async function controlCommand({ cmd, rest }, state) {
       `Other agents: ${config.agents === false ? 'kept out' : 'can learn from it'} · Comments reaching your agent: ${commentsSay()} · Contact shown: ${config.contact ?? 'none'} · Bans: ${(config.banned ?? []).length}`,
       'Change any of it: newtv help',
     ].join('\n')
+  }
+  if (cmd === 'title') {
+    const title = String(rest ?? '').trim().replace(/^["']|["']$/g, '')
+    const b = state?.id ? state : myRecent(1)[0]
+    if (!b) return 'Nothing broadcast yet to rename.'
+    if (!title) return 'Give it a title: newtv title "Build a game for my e-paper badge"'
+    const r = await call(`/v1/runs/${b.id}/settings`, { title }, b.key).catch(() => null)
+    if (r?.status !== 200) return `Couldn't rename it (${r?.body?.error ?? 'NewTV unreachable'}).`
+    return `${state?.id ? 'This session' : 'Your latest broadcast'} is now titled "${r.body.title}".`
   }
   // Claude Code's plugin settings decide who can watch; they're in /config.
   if ((cmd === 'public' || cmd === 'private') && sharing) return 'In Claude Code, choose who can watch in /config, under NewTV.'
@@ -388,6 +397,7 @@ const HELP = [
   '  newtv off / on          pause or resume broadcasting',
   '  newtv status            all your settings',
   '  newtv link              your links: one to share, one for you',
+  '  newtv title <text>      rename this session\'s broadcast',
   '  newtv private / public  who can watch (private also hides your latest)',
   '  newtv share full | steps | summary   how much each step shows',
   '  newtv hide <files>      never show these files, e.g. newtv hide src/billing/**',
@@ -1311,6 +1321,20 @@ async function command(cmd, args) {
       if (!handle) return console.log('Followers are counted for registered builders: `newtv payouts` or `newtv social` registers you.')
       const d = await getJson(`/v1/agents/${handle}`).catch(() => null)
       return console.log(`@${handle} has ${d?.stats?.followers ?? 0} follower${d?.stats?.followers === 1 ? '' : 's'}. NewTV only counts them; nobody can see who follows whom. Your page: https://newtv.dev/#/agent/${handle}`)
+    }
+    case 'title': {
+      // title [<broadcast id>] "New title": that broadcast, or your latest.
+      const id = /^r[0-9a-f]{20}$/.test(args[0] ?? '') ? args.shift() : null
+      const b = id ? myBroadcasts().find((x) => x.id === id) : myRecent(1)[0] ?? myBroadcasts().at(-1)
+      const title = args.join(' ').trim().replace(/^["']|["']$/g, '')
+      if (!b?.key) throw new Error(id ? `${id} isn't one of your broadcasts on this machine.` : 'Nothing broadcast yet.')
+      if (!title) throw new Error('Usage: title [<id>] "New title"')
+      const r = await call(`/v1/runs/${b.id}/settings`, { title }, b.key)
+      if (r.status !== 200) throw new Error(r.body?.error ?? `Renaming failed (${r.status})`)
+      // The local list shows the new title too.
+      const all = myBroadcasts().map((x) => (x.id === b.id ? { ...x, goal: r.body.title.slice(0, 120) } : x))
+      writeFileSync(LOG_FILE, `${all.map((x) => JSON.stringify(x)).join('\n')}\n`, { mode: 0o600 })
+      return console.log(`${b.id} is now titled "${r.body.title}".`)
     }
     case 'contact': {
       if (!args[0]) return console.log(config.contact ? `Viewers see how to reach you: ${config.contact}. \`newtv contact off\` removes it.` : 'Your broadcasts show no contact details. Add some with `newtv contact you@example.com` (or a link or handle).')
