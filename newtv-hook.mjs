@@ -1448,7 +1448,7 @@ async function command(cmd, args) {
           if (results.length) continue
           // A request from the person: its text, without NewTV's own commands or Claude Code's notices.
           const prompt = (typeof content === 'string' ? content : (content ?? []).filter((c) => c.type === 'text').map((c) => c.text).join('\n')).trim()
-          if (!prompt || prompt.startsWith('<') || prompt.startsWith('[Request interrupted') || parseChatCommand(prompt)) continue
+          if (!prompt || prompt.startsWith('<') || /^\[(Request interrupted|Usage limit|Earlier usage|Image #?\d)/i.test(prompt) || parseChatCommand(prompt)) continue
           endTurn()
           run({ hook_event_name: 'UserPromptSubmit', prompt })
           prompts++
