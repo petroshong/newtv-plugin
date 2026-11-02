@@ -934,11 +934,23 @@ async function command(cmd, args) {
       return
     }
     case 'uninstall': {
-      for (const a of agentsIn(args)) {
+      // No agent named: remove NewTV from every agent on this machine, the
+      // Claude Code plugin included, so one command undoes the installer.
+      const all = !Object.keys(AGENTS).some((a) => flag(args, a)) && !flag(args, 'project')
+      if (all && onPath('claude')) {
+        const listed = spawnSync('claude', ['plugin', 'list'], { encoding: 'utf8', shell: process.platform === 'win32' })
+        if (String(listed.stdout).includes('newtv@newtv')) {
+          spawnSync('claude', ['plugin', 'uninstall', 'newtv@newtv'], { stdio: 'inherit', shell: process.platform === 'win32' })
+          console.log('NewTV plugin removed from Claude Code.')
+        }
+      }
+      for (const a of all ? Object.keys(AGENTS) : agentsIn(args)) {
         const file = AGENTS[a].file(args)
-        console.log(removeHooks(a, file) ? `NewTV broadcasting removed from ${file}.` : `Nothing to remove for ${AGENTS[a].label}.`)
+        if (removeHooks(a, file)) console.log(`NewTV broadcasting removed from ${file}.`)
+        else if (!all) console.log(`Nothing to remove for ${AGENTS[a].label}.`)
         removeMcp(a)
       }
+      if (all) console.log('NewTV is off on this machine. Your settings stay in ~/.newtv (delete that folder to remove them too).')
       return
     }
     case 'setup': {
@@ -971,15 +983,10 @@ async function command(cmd, args) {
         process.exitCode = 1
         return
       }
-      // Counted (which agents, nothing else), so NewTV knows how many people install it.
-      if (telemetry) {
-        const agents = [onPath('claude') && 'claude', found.some((f) => f.startsWith('Codex')) && 'codex', found.some((f) => f.startsWith('Cursor')) && 'cursor'].filter(Boolean)
-        await fetch(`${API}/v1/installs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ agents }), signal: AbortSignal.timeout(TIMEOUT_MS) }).catch(() => {})
-      }
       console.log(`\n${found.join('\n')}`)
       console.log('\nIn your agent, type `newtv live` to see who is live, `newtv off` to pause, `newtv help` for the rest.')
       if (!code) console.log('Broadcasts are private: only someone with the link can watch.')
-      console.log('By using NewTV you agree to its Terms (https://newtv.dev/terms) and Privacy Policy (https://newtv.dev/privacy). Remove it any time: node ~/.newtv/newtv-hook.mjs uninstall')
+      console.log('By using NewTV you agree to its Terms (https://newtv.dev/terms) and Privacy Policy (https://newtv.dev/privacy). Remove it from every agent any time: node ~/.newtv/newtv-hook.mjs uninstall')
       return
     }
     case 'join': {
