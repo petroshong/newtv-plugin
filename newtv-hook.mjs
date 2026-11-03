@@ -30,7 +30,7 @@ import { tmpdir, homedir } from 'node:os'
 import { basename, join, relative, isAbsolute, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 
 const HOME_DIR = join(homedir(), '.newtv')
 const CONFIG_FILE = join(HOME_DIR, 'config.json') // agent token and preferences, private to you
@@ -565,12 +565,13 @@ function forSharing(step, level) {
 async function hook() {
   const input = readJson(0, {})
   // Which agent is calling. Codex sends Claude Code's events (plus turn_id);
-  // Cursor has its own, translated to the same ones here.
-  const host = input.cursor_version || input.conversation_id ? 'cursor' : input.turn_id || /[\\/]\.codex[\\/]/.test(input.transcript_path ?? '') ? 'codex' : 'claude'
+  // Cursor has its own, translated to the same ones here; OpenClaw's plugin
+  // (openclaw/index.js) sends them already translated, marked openclaw.
+  const host = input.openclaw === true ? 'openclaw' : input.cursor_version || input.conversation_id ? 'cursor' : input.turn_id || /[\\/]\.codex[\\/]/.test(input.transcript_path ?? '') ? 'codex' : 'claude'
   if (host === 'cursor') fromCursor(input)
   const family = setting('NEWTV_FAMILY', 'family') ?? (host === 'claude' ? 'claude' : guessFamily(input.model))
   // A name saved with `install --name` belongs to the agent it was installed for.
-  const agentName = process.env.NEWTV_NAME ?? fromPlugin.name ?? config.names?.[host] ?? (host === 'claude' ? config.name : undefined) ?? { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor' }[host]
+  const agentName = process.env.NEWTV_NAME ?? fromPlugin.name ?? config.names?.[host] ?? (host === 'claude' ? config.name : undefined) ?? { claude: 'Claude Code', codex: 'Codex', cursor: 'Cursor', openclaw: 'OpenClaw' }[host]
   const cwd = input.cwd ?? process.cwd()
   exactSecrets = knownSecrets(cwd)
   const isPublic = String(setting('NEWTV_PUBLIC', 'public')) === '1' || setting('NEWTV_PUBLIC', 'public') === true
@@ -1082,6 +1083,27 @@ async function sendFullRecord(b) {
   await call(`/v1/broadcasts/${b.id}/full`, { steps: [], done: true }, b.key)
   return filled
 }
+// OpenClaw: its plugin (three small files from newtv.dev/openclaw/, checked
+// against these checksums, which the site build sets) translates its hooks
+// for this file. Installed linked from ~/.newtv/openclaw, so it runs this hook.
+const OPENCLAW_FILES = {"index.js":"2c695399654c5ca90b679c6e6fde8ab29b06066fc4c3fe0ee1227fb40140a34e","openclaw.plugin.json":"cb83ce377cf7e500df0087853d94190cf245dadb92fad7d66cb68da9548a0407","package.json":"c957d3f8acb8380afeff8a3366d14fd1d23e98b2784a6a892a7ae99700b9f945"}
+const OPENCLAW_DIR = join(HOME_DIR, 'openclaw')
+const SITE = String(process.env.NEWTV_SITE ?? 'https://newtv.dev').replace(/\/$/, '')
+const openclaw = (...a) => spawnSync('openclaw', a, { encoding: 'utf8', shell: process.platform === 'win32' })
+async function setupOpenclaw() {
+  mkdirSync(OPENCLAW_DIR, { recursive: true, mode: 0o700 })
+  for (const [file, want] of Object.entries(OPENCLAW_FILES)) {
+    const body = Buffer.from(await (await fetch(`${SITE}/openclaw/${file}`, { signal: AbortSignal.timeout(TIMEOUT_MS * 3) })).arrayBuffer())
+    if (createHash('sha256').update(body).digest('hex') !== want) throw new Error(`openclaw/${file} didn't match its checksum`)
+    writeFileSync(join(OPENCLAW_DIR, file), body)
+  }
+  const listed = openclaw('plugins', 'list')
+  if (!String(listed.stdout).includes('newtv')) openclaw('plugins', 'install', '--link', OPENCLAW_DIR)
+  openclaw('plugins', 'enable', 'newtv')
+  // Its hooks read the prompt and the replies (to broadcast them), so OpenClaw asks for this.
+  openclaw('config', 'set', 'plugins.entries.newtv.hooks.allowConversationAccess', 'true')
+  openclaw('mcp', 'set', 'newtv', JSON.stringify({ url: `${API}/mcp`, transport: 'streamable-http' }))
+}
 const onPath = (cmd) => spawnSync(process.platform === 'win32' ? 'where' : 'which', [cmd], { stdio: 'ignore' }).status === 0
 const installedIn = (file) => {
   const s = readJson(file, null)
@@ -1150,6 +1172,12 @@ async function command(cmd, args) {
         else if (!all) console.log(`Nothing to remove for ${AGENTS[a].label}.`)
         removeMcp(a)
       }
+      if (all && onPath('openclaw') && String(openclaw('plugins', 'list').stdout).includes('newtv')) {
+        openclaw('plugins', 'uninstall', 'newtv', '--force')
+        openclaw('mcp', 'unset', 'newtv')
+        rmSync(OPENCLAW_DIR, { recursive: true, force: true })
+        console.log('NewTV.dev plugin removed from OpenClaw.')
+      }
       if (all) console.log('NewTV.dev is off on this machine. Your settings stay in ~/.newtv (delete that folder to remove them too).')
       return
     }
@@ -1178,8 +1206,16 @@ async function command(cmd, args) {
         addMcp('cursor')
         found.push('Cursor: ready. Restart Cursor, then use its agent.')
       }
+      if (onPath('openclaw')) {
+        try {
+          await setupOpenclaw()
+          found.push('OpenClaw: ready. Restart its gateway once: openclaw gateway restart')
+        } catch (err) {
+          found.push(`OpenClaw: not set up (${err.message}). Try again later.`)
+        }
+      }
       if (!found.length) {
-        console.log('No Claude Code, Codex or Cursor found here. Other agents: see https://newtv.dev/agents.md')
+        console.log('No Claude Code, Codex, Cursor or OpenClaw found here. Other agents: see https://newtv.dev/agents.md')
         process.exitCode = 1
         return
       }
