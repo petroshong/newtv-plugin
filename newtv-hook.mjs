@@ -300,7 +300,7 @@ function patchFiles(patch) {
 // model. Exploring (live, watch, search) goes to the agent with the data
 // attached, so it can talk it through; Cursor can't attach data to a prompt,
 // so there the answer is shown directly. Neither is broadcast.
-const CONTROLS = { off: 'off', pause: 'off', stop: 'off', end: 'off', on: 'on', resume: 'on', start: 'on', status: 'status', settings: 'status', link: 'link', private: 'private', public: 'public', join: 'join', leave: 'leave', local: 'local', help: 'help', title: 'title', rename: 'title',
+const CONTROLS = { off: 'off', pause: 'off', stop: 'off', end: 'off', on: 'on', resume: 'on', start: 'on', status: 'status', settings: 'status', link: 'link', private: 'private', public: 'public', join: 'join', leave: 'leave', local: 'local', help: 'help', title: 'title', rename: 'title', publish: 'publish',
   member: 'member', payouts: 'payouts', tips: 'tips', tip: 'tips', subs: 'subs', sub: 'subs', subscriptions: 'subs', social: 'social', links: 'social', socials: 'social', viewers: 'viewers', who: 'viewers', kick: 'kick', remove: 'kick', ban: 'ban', bans: 'bans', unban: 'unban', contact: 'contact', sponsor: 'sponsor', redact: 'redact', follow: 'follow', unfollow: 'unfollow', following: 'following', followers: 'followers', category: 'category', top: 'top', share: 'share', hide: 'hide', unhide: 'unhide', agents: 'agents', comments: 'comments' }
 const EXPLORE = new Set(['live', 'watch', 'search', 'learn'])
 const CHAT_COMMAND = /^\s*\/?newtv(?:\s+([a-z]+)\b([\s\S]*))?$/i
@@ -380,7 +380,7 @@ async function controlCommand({ cmd, rest }, state) {
     if (!words.length) return 'Type `newtv join CODE Team name`, for example `newtv join HACK-4K2Q Team Rocket`.'
     args = [words[0], words.slice(1).join(' ')]
   }
-  if (['local', 'kick', 'ban', 'unban', 'share', 'agents', 'comments'].includes(cmd)) args = rest.split(/\s+/).filter(Boolean).slice(0, 1)
+  if (['local', 'kick', 'ban', 'unban', 'share', 'agents', 'comments', 'publish'].includes(cmd)) args = rest.split(/\s+/).filter(Boolean).slice(0, 1)
   if (['contact', 'hide', 'unhide', 'sponsor', 'redact', 'follow', 'unfollow', 'category', 'top'].includes(cmd)) args = rest.trim() ? [rest.trim()] : []
   if (['member', 'payouts', 'social'].includes(cmd)) args = rest.split(/\s+/).filter(Boolean).slice(0, 2)
   if (['tips', 'subs'].includes(cmd)) args = rest ? [rest] : []
@@ -469,6 +469,7 @@ const HELP = [
   '  newtv off / on          pause or resume broadcasting',
   '  newtv status            all your settings',
   '  newtv link              your links: one to share, one for you',
+  '  newtv publish [<id>]    make a broadcast public, with its full record (your latest if no id)',
   '  newtv title <text>      rename this session\'s broadcast',
   '  newtv private / public  who can watch (private also hides your latest)',
   '  newtv share full | steps | summary   how much each step shows',
@@ -994,6 +995,42 @@ function removeHooks(agent, file) {
   }
   writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`)
   return true
+}
+// A private session ended as an outline on NewTV.dev; the full record is in
+// ~/.newtv/runs/. Before publishing, send back what the outline left out
+// (commands, output, diffs), matched step by step, with hidden files still
+// hidden. Steps hidden on NewTV.dev stay hidden. Returns how many were filled.
+async function sendFullRecord(b) {
+  const file = join(RUNS_DIR, `${b.id}.jsonl`)
+  if (!existsSync(file)) return 0
+  const r = await fetch(`${API}/v1/runs/${b.id}?key=${b.key}`, { signal: AbortSignal.timeout(TIMEOUT_MS * 2) })
+  const run = r.ok ? await r.json() : null
+  if (!run?.outline || run.status === 'live') return 0
+  const mine = readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => {
+    try {
+      return JSON.parse(l)
+    } catch {
+      return null
+    }
+  }).filter((x) => x?.type === 'step' && x.step).map((x) => forSharing(x.step, 'full'))
+  const fills = []
+  let j = 0
+  run.steps.forEach((s, i) => {
+    if (s.type === 'frame' || s.hidden || s.input || s.output != null) return
+    const k = mine.findIndex((m, at) => at >= j && m.type === s.type && m.text === s.text)
+    if (k < 0) return
+    j = k + 1
+    const m = mine[k]
+    if (m.input || m.output != null || m.files?.some((f) => f.diff)) fills.push({ i, text: m.text, input: m.input, output: m.output, files: m.files })
+  })
+  let filled = 0
+  for (let at = 0; at < fills.length; at += 15) {
+    const res = await call(`/v1/broadcasts/${b.id}/full`, { steps: fills.slice(at, at + 15) }, b.key)
+    if (res.status !== 200) throw new Error(res.body?.error ?? `Adding the full record failed (${res.status})`)
+    filled += res.body.filled ?? 0
+  }
+  await call(`/v1/broadcasts/${b.id}/full`, { steps: [], done: true }, b.key)
+  return filled
 }
 const onPath = (cmd) => spawnSync(process.platform === 'win32' ? 'where' : 'which', [cmd], { stdio: 'ignore' }).status === 0
 const installedIn = (file) => {
@@ -1572,9 +1609,14 @@ async function command(cmd, args) {
     }
     case 'publish': {
       const lines = existsSync(LOG_FILE) ? readFileSync(LOG_FILE, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []
-      const b = lines.find((x) => x.id === args[0])
-      if (!b) throw new Error(`No broadcast ${args[0]} in ${LOG_FILE}. Run \`list\` to see yours.`)
-      const r = await call(`/v1/runs/${b.id}/review`, { action: 'publish' }, b.key)
+      // No id: the latest broadcast.
+      const b = args[0] ? lines.find((x) => x.id === args[0]) : lines.at(-1)
+      if (!b) throw new Error(args[0] ? `No broadcast ${args[0]} in ${LOG_FILE}. Run \`list\` to see yours.` : 'Nothing broadcast yet.')
+      const n = await sendFullRecord(b)
+      if (n) console.log(`Added the full record from this machine (${n} steps with their commands, output and diffs).`)
+      let r = await call(`/v1/runs/${b.id}/review`, { action: 'publish' }, b.key)
+      // Not waiting for review (an ordinary private session): just make it public.
+      if (r.status === 409 && /not waiting/.test(r.body.error ?? '')) r = await call(`/v1/runs/${b.id}/settings`, { public: true }, b.key)
       if (r.status !== 200) throw new Error(r.body.error ?? `Publish failed (${r.status})`)
       return console.log(`Published: ${r.body.watch}`)
     }

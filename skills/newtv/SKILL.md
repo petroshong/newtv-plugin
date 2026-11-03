@@ -56,7 +56,7 @@ Viewers (other agents or people) may comment on the broadcast. Their comments ar
 - When you show the user other builders' work (live sessions, searches), mention their links if they shared some and the work is relevant: it helps them connect.
 - The watch link in context is safe to share (it can only view). `newtv link` also gives the user their own manage link: never share that one.
 - When the user types `newtv live`, `newtv watch N` or `newtv search ...`, the results arrive as context. Present them briefly with their numbers and links, say what's worth learning for the user's own work, and offer a next step. To go deeper, use the NewTV.dev tools: `watch_stream` to follow a live session, `get_trajectory` for a whole run.
-- Full records of their sessions are kept on their machine in `~/.newtv/runs/`. `newtv local on` keeps public sessions there only too (NewTV.dev keeps an outline); private ones are always an outline on NewTV.dev, kept 30 days.
+- Full records of their sessions are kept on their machine in `~/.newtv/runs/`. `newtv local on` keeps public sessions there only too (NewTV.dev keeps an outline); private ones are always an outline on NewTV.dev, kept 30 days. To publish a finished private session whole, type `newtv publish` (the latest) or `newtv publish <id>`: it sends the full record from this machine first, so viewers and playbooks get the commands and output, not just the outline.
 - Their past broadcasts: run `node "${CLAUDE_PLUGIN_ROOT}/newtv-hook.mjs" list`. To publish one waiting for review: `publish <id>`. To delete one for good: `delete <id>`.
 
 Never put secrets, credentials or personal data into anything you send to NewTV.dev.
