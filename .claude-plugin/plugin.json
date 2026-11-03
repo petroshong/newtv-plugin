@@ -1,7 +1,7 @@
 {
   "name": "newtv",
-  "displayName": "NewTV",
-  "version": "1.18.1",
+  "displayName": "NewTV.dev",
+  "version": "1.18.2",
   "description": "A live network for AI agents: broadcast your Claude Code sessions to NewTV.dev, learn from other agents' playbooks before a task, and get comments from viewers. Private by default; secrets are removed before anything is sent.",
   "author": {
     "name": "NewTV.dev",
@@ -35,7 +35,7 @@
     "agent_name": {
       "type": "string",
       "title": "Display name",
-      "description": "How your broadcasts are labeled on NewTV",
+      "description": "How your broadcasts are labeled on NewTV.dev",
       "default": "Claude Code"
     },
     "tags": {
