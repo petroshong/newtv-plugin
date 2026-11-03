@@ -300,7 +300,7 @@ function patchFiles(patch) {
 // model. Exploring (live, watch, search) goes to the agent with the data
 // attached, so it can talk it through; Cursor can't attach data to a prompt,
 // so there the answer is shown directly. Neither is broadcast.
-const CONTROLS = { off: 'off', pause: 'off', stop: 'off', end: 'off', on: 'on', resume: 'on', start: 'on', status: 'status', settings: 'status', link: 'link', private: 'private', public: 'public', join: 'join', leave: 'leave', local: 'local', help: 'help', title: 'title', rename: 'title', publish: 'publish',
+const CONTROLS = { off: 'off', pause: 'off', stop: 'off', end: 'off', on: 'on', resume: 'on', start: 'on', status: 'status', settings: 'status', link: 'link', private: 'private', public: 'public', join: 'join', leave: 'leave', local: 'local', help: 'help', title: 'title', rename: 'title', publish: 'publish', go: 'golive', golive: 'golive',
   member: 'member', payouts: 'payouts', tips: 'tips', tip: 'tips', subs: 'subs', sub: 'subs', subscriptions: 'subs', social: 'social', links: 'social', socials: 'social', viewers: 'viewers', who: 'viewers', kick: 'kick', remove: 'kick', ban: 'ban', bans: 'bans', unban: 'unban', contact: 'contact', sponsor: 'sponsor', redact: 'redact', follow: 'follow', unfollow: 'unfollow', following: 'following', followers: 'followers', category: 'category', top: 'top', share: 'share', hide: 'hide', unhide: 'unhide', agents: 'agents', comments: 'comments' }
 const EXPLORE = new Set(['live', 'watch', 'search', 'learn'])
 const CHAT_COMMAND = /^\s*\/?newtv(?:\s+([a-z]+)\b([\s\S]*))?$/i
@@ -335,6 +335,13 @@ function parseChatCommand(prompt) {
   return null // "newtv is broken, fix it" is an ordinary prompt
 }
 
+// "newtv go live Building a game" -> { title }; "newtv go private" (or "go live off") -> { off }.
+function goLiveArgs(rest) {
+  const r = String(rest ?? '').trim().replace(/^live\b\s*/i, '')
+  const off = /^(private|off|stop)$/i.test(r) || /^(off|stop)$/i.test(r.replace(/^live\s*/i, ''))
+  return { off, title: off ? '' : scrub(r.replace(/^["']|["']$/g, ''), 200) }
+}
+
 async function controlCommand({ cmd, rest }, state) {
   if (cmd === 'help') return HELP
   if (cmd === 'link') {
@@ -347,6 +354,21 @@ async function controlCommand({ cmd, rest }, state) {
       b.manage ?? `${b.watch.split('/w/')[0]}/#/watch/${b.id}/${b.key}`,
       handle ? `\nREADME badge (red while you're live):\n[![NewTV.dev](${API}/badge/agent/${handle}.svg)](https://newtv.dev/#/agent/${handle})` : '',
     ].filter(Boolean).join('\n')
+  }
+  // newtv go live [title]: this session, public now (listed under Live); newtv go private: private again.
+  if (cmd === 'golive') {
+    const { off, title } = goLiveArgs(rest)
+    if (!state?.id) return off ? 'Nothing is live in this session.' : 'Nothing is broadcasting in this session yet.'
+    const r = await call(`/v1/runs/${state.id}/settings`, { public: !off, ...(title ? { title } : {}) }, state.key)
+    if (r.status !== 200) return `Couldn't change it: ${r.body?.error ?? r.status}.`
+    // The local list shows it too.
+    const all = myBroadcasts().map((x) => (x.id === state.id ? { ...x, public: !off, review: false, ...(title ? { goal: r.body.title.slice(0, 120) } : {}) } : x))
+    writeFileSync(LOG_FILE, `${all.map((x) => JSON.stringify(x)).join('\n')}\n`, { mode: 0o600 })
+    state.public = !off
+    state.review = false
+    return off
+      ? 'This session is private again: only people with the link can watch, and it\'s off the Live list.'
+      : [`You're live${title ? `: "${title}"` : ''}. Anyone can watch, and it's listed under Live on newtv.dev:`, state.watch, 'Secrets are still removed before anything is shown. `newtv go private` makes it private again.'].join('\n')
   }
   if (cmd === 'status') {
     const isPublic = String(setting('NEWTV_PUBLIC', 'public')) === '1' || setting('NEWTV_PUBLIC', 'public') === true
@@ -469,6 +491,7 @@ const HELP = [
   '  newtv off / on          pause or resume broadcasting',
   '  newtv status            all your settings',
   '  newtv link              your links: one to share, one for you',
+  '  newtv go live [title]   let anyone watch this session now (listed under Live); newtv go private',
   '  newtv publish [<id>]    make a broadcast public, with its full record (your latest if no id)',
   '  newtv title <text>      rename this session\'s broadcast',
   '  newtv private / public  who can watch (private also hides your latest)',
@@ -561,8 +584,13 @@ async function hook() {
     // Pausing ends this session's broadcast; other commands leave it running.
     if (state?.id && chat.cmd === 'off') await call(`/v1/broadcasts/${state.id}/end`, { status: 'done', answer: state.lastAnswer }, state.key).catch(() => {})
     const block = (text) => process.stdout.write(JSON.stringify(host === 'cursor' ? { continue: false, user_message: `NewTV.dev\n${text}` } : { decision: 'block', reason: `NewTV.dev\n${text}` }))
+    if (chat.kind === 'control' && chat.cmd === 'golive' && !state?.id && !goLiveArgs(chat.rest).off) {
+      saveState({ ...state, goLive: { title: goLiveArgs(chat.rest).title } })
+      return block('This session goes live with your first task: anyone can watch, and it\'s listed under Live on newtv.dev. Secrets are still removed before anything is shown. Type your task.')
+    }
     if (chat.kind === 'control') {
       const reply = await controlCommand(chat, state)
+      if (chat.cmd === 'golive' && state?.id) saveState(state) // remembers it's public now
       if (chat.cmd === 'off') rmSync(stateFile, { force: true }) // pausing ends this session's broadcast
       return block(reply)
     }
@@ -594,14 +622,17 @@ async function hook() {
 
   const eventCode = setting('NEWTV_EVENT', 'event')
   async function goLive(goal) {
+    // `newtv live` before the first task: this session starts public, as it happens.
+    const live = state?.goLive
+    const pub = isPublic || !!live
     const body = {
-      goal: scrub(goal, 600) || 'Coding session',
+      goal: scrub(live?.title || goal, 600) || 'Coding session',
       kind: 'code',
       project: basename(cwd),
       tags: String(setting('NEWTV_TAGS', 'tags') ?? '').split(',').filter(Boolean),
       agent: { name: agentName, model: input.model ?? undefined, ...(family ? { family } : {}) },
-      public: isPublic,
-      review: isPublic && review,
+      public: pub,
+      review: pub && review && !live,
       client: clientId(),
       ...(config.memberToken ? { member: config.memberToken } : {}), // membership perks
       ...(config.links && Object.keys(config.links).length ? { links: config.links } : {}), // the builder's social links
@@ -611,19 +642,19 @@ async function hook() {
       // Whose comments reach the agent: subscribers and tippers unless they chose everyone (or none).
       comments: config.comments === false ? false : config.comments === 'all' ? true : 'subscribers',
       blocked: blockedNow(),
-      ...(localCopy && (!isPublic || keepLocal) ? { store: 'outline' } : {}),
+      ...(localCopy && (!pub || keepLocal) ? { store: 'outline' } : {}),
       ...(eventCode ? { event: eventCode, team: setting('NEWTV_TEAM', 'team'), member: config.member, member_name: setting('NEWTV_NAME', 'name') ?? config.name } : {}),
     }
     let r = await call('/v1/broadcasts', body)
     // A mistyped or ended event code shouldn't stop the broadcast itself.
     if (r.status === 400 && eventCode) r = await call('/v1/broadcasts', { ...body, event: undefined, team: undefined, member: undefined, member_name: undefined })
     if (r.status !== 200) return null
-    const s = { id: r.body.id, key: r.body.key, watch: r.body.watch, manage: r.body.manage, event: r.body.event ?? null, goal: scrub(goal, 120) }
+    const s = { id: r.body.id, key: r.body.key, watch: r.body.watch, manage: r.body.manage, event: r.body.event ?? null, goal: scrub(goal, 120), public: pub, review: pub && review && !live }
     saveState(s)
     // Your private record of what you've broadcast, so you can delete any of it.
     mkdirSync(HOME_DIR, { recursive: true, mode: 0o700 })
-    appendFileSync(LOG_FILE, `${JSON.stringify({ ...s, goal: scrub(goal, 120), public: isPublic, review: isPublic && review, project: basename(cwd), at: new Date().toISOString() })}\n`, { mode: 0o600 })
-    record(s.id, { type: 'start', goal: body.goal, project: body.project, agent: body.agent, public: isPublic, watch: s.watch })
+    appendFileSync(LOG_FILE, `${JSON.stringify({ ...s, goal: scrub(live?.title || goal, 120), project: basename(cwd), at: new Date().toISOString() })}\n`, { mode: 0o600 })
+    record(s.id, { type: 'start', goal: body.goal, project: body.project, agent: body.agent, public: pub, watch: s.watch })
     return s
   }
   async function end(s, summary, status = 'done') {
@@ -770,10 +801,12 @@ async function hook() {
     if (s === state && s) saveState(s)
     const notes = []
     if (s) {
-      const who = isPublic ? (review ? 'public after review' : 'public') : 'private: only someone with the link can watch'
-      notes.push(`This task is being broadcast on NewTV.dev (${who}). Watch link, if the user asks for it: ${s.watch}. If the user wants to stop broadcasting, they can type \`newtv off\` as a message (\`newtv help\` lists the rest).`)
+      const sPublic = s.public ?? isPublic
+      const sReview = s.review ?? (isPublic && review)
+      const who = sPublic ? (sReview ? 'public after review: private while live' : 'live: anyone can watch') : 'private: only someone with the link can watch'
+      notes.push(`This task is being broadcast on NewTV.dev (${who}). Watch link, if the user asks for it: ${s.watch}. If the user wants to stop broadcasting, they can type \`newtv off\` as a message${sPublic && !sReview ? '' : '; to let anyone watch this session now, \`newtv go live\`'} (\`newtv help\` lists the rest).`)
       // Public sessions become playbooks; one the agent writes saves NewTV writing it.
-      if (isPublic) notes.push(`If this task teaches something another agent could reuse, end by sharing a short playbook: pipe JSON {"title","summary","steps":[...],"pitfalls":[...],"tags":[...]} to \`node "${fileURLToPath(import.meta.url)}" playbook ${s.id}\`. No secrets, personal data or private paths.`)
+      if (sPublic) notes.push(`If this task teaches something another agent could reuse, end by sharing a short playbook: pipe JSON {"title","summary","steps":[...],"pitfalls":[...],"tags":[...]} to \`node "${fileURLToPath(import.meta.url)}" playbook ${s.id}\`. No secrets, personal data or private paths.`)
       // What no pattern can catch, the agent can: hide what it just showed.
       notes.push(`You're on camera. If anything you show may contain a secret or personal information NewTV.dev wouldn't recognize (in plain words, an unusual format, a screenshot of a keys or settings page), right after it run \`node "${fileURLToPath(import.meta.url)}" redact last\` and tell the user; if a real key was shown, they should rotate it.`)
       if (s.event_note) notes.push(`Tell the user briefly: ${s.event_note}`)
