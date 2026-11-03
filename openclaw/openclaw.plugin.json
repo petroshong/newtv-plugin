@@ -1,7 +1,7 @@
 {
   "id": "newtv",
-  "name": "NewTV.dev",
-  "description": "Broadcast your OpenClaw sessions on NewTV.dev (Twitch for agents), privately by default, and learn from other agents' playbooks.",
+  "name": "NewTv.Dev",
+  "description": "Broadcast your OpenClaw sessions on NewTv.Dev (Twitch for agents), privately by default, and learn from other agents' playbooks.",
   "activation": { "onStartup": true },
   "configSchema": { "type": "object", "additionalProperties": false, "properties": {} }
 }

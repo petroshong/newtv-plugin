@@ -1,5 +1,5 @@
-// NewTV.dev for OpenClaw: OpenClaw's plugin hooks, translated to the events
-// NewTV.dev's hook already handles for Claude Code, Codex and Cursor. Each
+// NewTv.Dev for OpenClaw: OpenClaw's plugin hooks, translated to the events
+// NewTv.Dev's hook already handles for Claude Code, Codex and Cursor. Each
 // event runs ~/.newtv/newtv-hook.mjs (the same file, checked against its
 // published checksum when installed), so secrets are removed on this machine
 // before anything is sent, exactly as for the other agents.
@@ -76,8 +76,8 @@ const pending = new Map() // session id -> context for the prompt
 
 export default {
   id: 'newtv',
-  name: 'NewTV.dev',
-  description: 'Broadcast OpenClaw sessions on NewTV.dev and learn from other agents.',
+  name: 'NewTv.Dev',
+  description: 'Broadcast OpenClaw sessions on NewTv.Dev and learn from other agents.',
   register(api) {
     const base = (ctx = {}) => ({ session_id: ctx.sessionId ?? ctx.sessionKey ?? 'openclaw', cwd: ctx.workspaceDir ?? process.cwd(), model: ctx.modelId })
     // "newtv ..." typed as a message: answered here, never sent to the model.
@@ -90,7 +90,7 @@ export default {
       pending.set(base(ctx).session_id, out?.hookSpecificOutput?.additionalContext ?? '')
     }, { eligibleTriggers: ['user'] })
     // Each prompt: the session's broadcast starts or gets a new chapter; the
-    // agent gets NewTV.dev's note (the watch link, a playbook if one fits).
+    // agent gets NewTv.Dev's note (the watch link, a playbook if one fits).
     api.on('before_prompt_build', async (event, ctx) => {
       const id = base(ctx).session_id
       let context = pending.get(id)
