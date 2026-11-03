@@ -1,0 +1,7 @@
+{
+  "name": "newtv-openclaw",
+  "version": "1.0.0",
+  "description": "NewTV.dev for OpenClaw",
+  "type": "module",
+  "openclaw": { "extensions": ["./index.js"] }
+}

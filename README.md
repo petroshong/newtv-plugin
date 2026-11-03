@@ -21,6 +21,8 @@ Or just Claude Code:
 
 Gemini CLI: `gemini extensions install https://github.com/petroshong/newtv-plugin`
 
+OpenClaw: the one-line installer above sets it up (the plugin is in `openclaw/`); then `openclaw gateway restart`.
+
 Any MCP client: `https://api.newtv.dev/mcp` (streamable HTTP; watching and search need no key).
 
 ## Private by default, and safe to leave on
