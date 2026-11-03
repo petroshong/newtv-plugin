@@ -762,7 +762,7 @@ async function hook() {
     const q = scrub(String(prompt ?? '').slice(0, 300), 300)
     if (!q || q.length < 12) return null
     try {
-      const res = await fetch(`${API}/v1/playbooks?q=${encodeURIComponent(q)}${family ? `&prefer_family=${family}` : ''}&limit=1`, { signal: AbortSignal.timeout(TIMEOUT_MS) })
+      const res = await fetch(`${API}/v1/playbooks?q=${encodeURIComponent(q)}${family ? `&prefer_family=${family}` : ''}&limit=1&from=hook`, { signal: AbortSignal.timeout(TIMEOUT_MS) })
       const p = (await res.json()).playbooks?.[0]
       if (!p || p.score < 4) return null // a strong match only: a wrong playbook is noise
       const record = [p.worked ? `worked for ${p.worked} agents` : '', p.briefed?.worked + p.briefed?.failed ? `sessions briefed with it ended well ${p.briefed.worked} of ${p.briefed.worked + p.briefed.failed} times` : ''].filter(Boolean).join('; ')
@@ -811,8 +811,10 @@ async function hook() {
       clearState()
       return goLive(input.prompt)
     }
-    // A new session: who the user follows is live, for the agent to know (not to announce).
-    const [s, briefing, live] = await Promise.all([next(), playbookBriefing(input.prompt), state?.id ? [] : followedLive().catch(() => [])])
+    // A new session: who the user follows is live, for the agent to know (not to
+    // announce); and whether the last session, private, is worth publishing.
+    const prev = state?.id ? null : myBroadcasts().at(-1)
+    const [s, briefing, live, hint] = await Promise.all([next(), playbookBriefing(input.prompt), state?.id ? [] : followedLive().catch(() => []), publishHint(prev).catch(() => null)])
     if (s === state && s) saveState(s)
     const notes = []
     if (s) {
@@ -837,6 +839,7 @@ async function hook() {
         notes.push('Once, at the end of your reply, add one short line for the user: viewers can tip them and subscribe monthly on NewTV.dev; `newtv payouts` sets it up (paid to their own Stripe account). Say it only this time.')
       }
     }
+    if (s && hint && !notes.some((n) => n.startsWith('Once,') || n.includes('Once, at'))) notes.push(hint)
     if (briefing) {
       notes.push(briefing.text)
       // So the playbook learns how this session ended.
@@ -930,6 +933,21 @@ async function applyToLatest(body) {
 }
 const onOff = (v) => (v === 'on' ? true : v === 'off' ? false : null)
 const commentsSay = () => (config.comments === false ? 'none (comments off)' : config.comments === 'all' ? 'everyone\'s' : 'subscribers\' and tippers\'')
+// Most sessions stay private, so others never learn from them. When the last
+// one ended private and went cleanly (enough steps, the last check passing,
+// nothing flagged or caught), offer to publish it: at most once a day, three
+// times ever, never once the user has published. Its title isn't repeated,
+// since this session may be public.
+async function publishHint(prev) {
+  const c = readJson(CONFIG_FILE, {})
+  if (!prev?.key || prev.public || c.published || (c.publishHints ?? 0) >= 3 || Date.now() - Date.parse(c.publishHintAt ?? 0) < 86_400_000) return null
+  const r = await call(`/v1/runs/${prev.id}`, null, prev.key, 'GET')
+  const run = r.body ?? {}
+  const checks = (run.steps ?? []).filter((x) => typeof x.ok === 'boolean')
+  if (r.status !== 200 || !run.owner || run.public || run.live || run.heldSteps || run.secretsRemoved || (run.steps?.length ?? 0) < 6 || checks.at(-1)?.ok === false) return null
+  saveConfig({ ...readJson(CONFIG_FILE, {}), publishHints: (c.publishHints ?? 0) + 1, publishHintAt: new Date().toISOString() })
+  return `Once, at the end of your reply, add one short line for the user: their previous session ended private, and it went cleanly; if it could help other builders and agents learn, \`newtv publish ${prev.id}\` makes it public with its full record (their latest broadcasts, with links, are under \`newtv status\`). Don't repeat what that session was about. Say it only this time.`
+}
 // Payouts, tips and subscriptions use the registered agent's token (registered
 // here if there's none yet).
 async function payoutsClient() {
@@ -1729,6 +1747,7 @@ async function command(cmd, args) {
       // Not waiting for review (an ordinary private session): just make it public.
       if (r.status === 409 && /not waiting/.test(r.body.error ?? '')) r = await call(`/v1/runs/${b.id}/settings`, { public: true }, b.key)
       if (r.status !== 200) throw new Error(r.body.error ?? `Publish failed (${r.status})`)
+      saveConfig({ ...readJson(CONFIG_FILE, {}), published: true }) // no more offers to publish
       return console.log(`Published: ${r.body.watch}`)
     }
     case 'delete': {
