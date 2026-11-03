@@ -482,16 +482,17 @@ async function exploreCommand({ cmd, rest }, family) {
 }
 
 const HELP = [
-  'NewTV.dev commands (type them as a message; they are never broadcast):',
+  'NewTV.dev commands (type them as a message; they are never broadcast). Guide: https://newtv.dev/start.html',
+  'Start here',
+  '  newtv go live [title]   let anyone watch this session now (listed under Live); newtv go private',
+  '  newtv link              your links: one to share, one for you',
+  '  newtv off / on          pause or resume broadcasting',
   'Watch others',
   '  newtv live              who is live now (newtv live claude: one family)',
   '  newtv watch 2           a session\'s latest steps, from the last list',
   '  newtv search <topic>    playbooks and sessions about a topic',
   'Your broadcasts',
-  '  newtv off / on          pause or resume broadcasting',
   '  newtv status            all your settings',
-  '  newtv link              your links: one to share, one for you',
-  '  newtv go live [title]   let anyone watch this session now (listed under Live); newtv go private',
   '  newtv publish [<id>]    make a broadcast public, with its full record (your latest if no id)',
   '  newtv title <text>      rename this session\'s broadcast',
   '  newtv private / public  who can watch (private also hides your latest)',
@@ -811,9 +812,12 @@ async function hook() {
       notes.push(`You're on camera. If anything you show may contain a secret or personal information NewTV.dev wouldn't recognize (in plain words, an unusual format, a screenshot of a keys or settings page), right after it run \`node "${fileURLToPath(import.meta.url)}" redact last\` and tell the user; if a real key was shown, they should rotate it.`)
       if (s.event_note) notes.push(`Tell the user briefly: ${s.event_note}`)
       if (s.event) notes.push(`It's part of the event "${s.event.name}" as team "${s.event.team}": the event's organizers${s.event.sponsors?.length ? ` and sponsors (${s.event.sponsors.join(', ')})` : ''} can follow it.`)
-      // Once, ever: tell the builder they can be paid for this (unless they've looked already).
+      // Once, ever, on the first broadcast: what this is and the few commands that matter.
       const cfg = readJson(CONFIG_FILE, {})
-      if (!cfg.earnNudged && !cfg.payoutsSeen) {
+      if (!cfg.welcomed) {
+        saveConfig({ ...cfg, welcomed: true })
+        notes.push(`This is the user's first NewTV.dev broadcast. Once, at the start of your reply, tell them in a few short lines: this session is now broadcast on NewTV.dev (${sPublic && !sReview ? 'public: anyone can watch' : 'private: only someone with the link can watch'}), with the watch link; that they can type \`newtv go live\` to let anyone watch, \`newtv off\` to pause, and \`newtv help\` for every command; and that the guide is https://newtv.dev/start.html. Then do the task. Say this only this time.`)
+      } else if (!cfg.earnNudged && !cfg.payoutsSeen) {
         saveConfig({ ...cfg, earnNudged: true })
         notes.push('Once, at the end of your reply, add one short line for the user: viewers can tip them and subscribe monthly on NewTV.dev; `newtv payouts` sets it up (paid to their own Stripe account). Say it only this time.')
       }
@@ -1168,8 +1172,17 @@ async function command(cmd, args) {
       }
       console.log(`\n${found.join('\n')}`)
       console.log('\nNot live yet: sessions already open are not broadcast. NewTV.dev starts with the next session you open.')
-      console.log('\nIn your agent, type `newtv live` to see who is live, `newtv off` to pause, `newtv help` for the rest.')
-      if (!code) console.log('Broadcasts are private: only someone with the link can watch.')
+      console.log([
+        '',
+        'How it works:',
+        `  Each agent session is one broadcast, ${code ? 'shared with the event' : 'private: only someone with the link can watch'}. Secrets are removed first.`,
+        '  Type these as messages in your agent (they are never broadcast):',
+        '    newtv go live [title]   let anyone watch this session now',
+        '    newtv link              the link to share',
+        '    newtv off / on          pause or resume',
+        '    newtv help              every command',
+        '  Viewers can comment, follow you, tip and subscribe. The guide for hosts and viewers: https://newtv.dev/start.html',
+      ].join('\n'))
       console.log('By using NewTV.dev you agree to its Terms (https://newtv.dev/terms) and Privacy Policy (https://newtv.dev/privacy). Remove it from every agent any time: node ~/.newtv/newtv-hook.mjs uninstall')
       return
     }
