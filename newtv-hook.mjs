@@ -301,7 +301,7 @@ function patchFiles(patch) {
 // attached, so it can talk it through; Cursor can't attach data to a prompt,
 // so there the answer is shown directly. Neither is broadcast.
 const CONTROLS = { off: 'off', pause: 'off', stop: 'off', end: 'off', on: 'on', resume: 'on', start: 'on', status: 'status', settings: 'status', link: 'link', private: 'private', public: 'public', join: 'join', leave: 'leave', local: 'local', help: 'help', title: 'title', rename: 'title', publish: 'publish', go: 'golive', golive: 'golive',
-  member: 'member', payouts: 'payouts', tips: 'tips', tip: 'tips', subs: 'subs', sub: 'subs', subscriptions: 'subs', social: 'social', links: 'social', socials: 'social', viewers: 'viewers', who: 'viewers', kick: 'kick', remove: 'kick', ban: 'ban', bans: 'bans', unban: 'unban', contact: 'contact', sponsor: 'sponsor', redact: 'redact', follow: 'follow', unfollow: 'unfollow', following: 'following', followers: 'followers', category: 'category', top: 'top', share: 'share', hide: 'hide', unhide: 'unhide', agents: 'agents', comments: 'comments' }
+  member: 'member', payouts: 'payouts', wallet: 'wallet', tips: 'tips', tip: 'tips', subs: 'subs', sub: 'subs', subscriptions: 'subs', social: 'social', links: 'social', socials: 'social', viewers: 'viewers', who: 'viewers', kick: 'kick', remove: 'kick', ban: 'ban', bans: 'bans', unban: 'unban', contact: 'contact', sponsor: 'sponsor', redact: 'redact', follow: 'follow', unfollow: 'unfollow', following: 'following', followers: 'followers', category: 'category', top: 'top', share: 'share', hide: 'hide', unhide: 'unhide', agents: 'agents', comments: 'comments' }
 const EXPLORE = new Set(['live', 'watch', 'search', 'learn'])
 const CHAT_COMMAND = /^\s*\/?newtv(?:\s+([a-z]+)\b([\s\S]*))?$/i
 const LAST_LIST = join(HOME_DIR, 'last-list.json') // what `newtv watch 2` refers to
@@ -415,7 +415,7 @@ async function controlCommand({ cmd, rest }, state) {
   }
   if (['local', 'kick', 'ban', 'unban', 'share', 'agents', 'comments', 'publish'].includes(cmd)) args = rest.split(/\s+/).filter(Boolean).slice(0, 1)
   if (['contact', 'hide', 'unhide', 'sponsor', 'redact', 'follow', 'unfollow', 'category', 'top'].includes(cmd)) args = rest.trim() ? [rest.trim()] : []
-  if (['member', 'payouts', 'social'].includes(cmd)) args = rest.split(/\s+/).filter(Boolean).slice(0, 2)
+  if (['member', 'payouts', 'social', 'wallet'].includes(cmd)) args = rest.split(/\s+/).filter(Boolean).slice(0, 2)
   if (['tips', 'subs'].includes(cmd)) args = rest ? [rest] : []
   const said = []
   const log = console.log
@@ -527,6 +527,7 @@ const HELP = [
   '  newtv payouts           get paid for your broadcasts (Stripe); newtv payouts dashboard',
   '  newtv tips on / off     tips on your broadcasts; newtv tips amounts 5 10 25; newtv tips note <text>',
   '  newtv subs 5            a $5/month subscription to you; newtv subs off; newtv subs note <perks>',
+  '  newtv wallet 0x…        tips in USDC (x402), straight to your own wallet on Base; newtv wallet remove',
   'Events: newtv join CODE Team, newtv leave',
 ].join('\n')
 
@@ -1330,6 +1331,21 @@ async function command(cmd, args) {
       if (cmd === 'tips') return console.log(`${now.tips ? `Tips are on: viewers see a Tip button on your broadcasts, with ${now.amounts?.length ? now.amounts.map((x) => `$${x}`).join(', ') : '$5, $10, $20, $50'} (any amount from $5). You get each tip ${fee}.` : 'Tips are off: no Tip button on your broadcasts.'}${now.note ? `\nYour note to tippers: "${now.note}"` : ''}${live}\nChange it: newtv tips on / off, newtv tips amounts 5 10 25, newtv tips note <text>.`)
       const subs = st.body.subscribers
       return console.log(`${now.sub ? `Viewers can subscribe to you for $${now.sub}/month (Subscribe on your broadcasts and your page, newtv.dev/#/agent/${st.body.handle}). You get each payment ${fee}. Subscribers get a badge, and their comments reach your agent.${subs ? `\nSubscribers now: ${subs.count}${subs.more ? '+' : ''} ($${subs.monthly}/month before fees).` : ''}` : 'No subscriptions: viewers can only tip. Offer one with `newtv subs 5` ($3 to $100 a month).'}${now.subNote ? `\nWhat subscribers get: "${now.subNote}"` : ''}${live}\nChange it: newtv subs <price>, newtv subs off, newtv subs note <perks>.`)
+    }
+    // Tips in USDC (x402) go straight to the builder's own wallet: no Stripe,
+    // nothing kept by NewTV.dev. Only its public address is ever sent.
+    case 'wallet': {
+      const c = readJson(CONFIG_FILE, {})
+      const word = String(args[0] ?? '').trim()
+      if (!word) return console.log(c.wallet ? `Tips in USDC go to your wallet ${c.wallet} (on Base). Agents and wallets tip you with x402; you get all of it.\nChange it: newtv wallet 0x…, or newtv wallet remove.` : 'No wallet for tips in USDC. Add one (its public address, on Base): newtv wallet 0x…\nAgents and wallets can then tip you with x402, straight to it; NewTV.dev takes nothing.')
+      const remove = /^(remove|off|none)$/i.test(word)
+      if (!remove && !/^0x[0-9a-fA-F]{40}$/.test(word)) throw new Error(/^(0x)?[0-9a-fA-F]{64}$/.test(word) ? 'That looks like a private key: never share it. Give your wallet\'s public address (0x and 40 characters), and if that key was real, move its money to a new wallet.' : 'Give your wallet\'s public address: newtv wallet 0x… (0x and 40 hex characters).')
+      const { get } = await payoutsClient()
+      const r = await get('/v1/agents/me/wallet', 'PUT', { wallet: remove ? null : word })
+      if (r.status !== 200) throw new Error(r.body?.error ?? 'Couldn\'t save your wallet.')
+      saveConfig({ ...readJson(CONFIG_FILE, {}), wallet: r.body.wallet ?? undefined })
+      if (!r.body.wallet) return console.log('Wallet removed: no more tips in USDC.')
+      return console.log(`Tips in USDC now go straight to ${r.body.wallet} on Base: all of each tip, NewTV.dev takes nothing.${r.body.tips ? '' : ' (x402 isn\'t switched on for this server yet.)'}\nAgents tip you with x402: POST ${API}/v1/x402/tip/${r.body.handle}/<dollars>. Each tip shows on the broadcast it was for.`)
     }
     case 'payouts': {
       const { headers, get } = await payoutsClient()
