@@ -1638,7 +1638,7 @@ async function command(cmd, args) {
       const d = await getJson(`/v1/agents?limit=10${cat ? `&category=${encodeURIComponent(cat)}` : ''}`)
       if (!d.agents.length) return console.log(`No ranked builders${cat ? ` in "${cat}"` : ''} yet.`)
       const mine = new Set(readJson(CONFIG_FILE, {}).following ?? [])
-      return console.log([`Top builders on NewTv.Dev${d.category ? ` in ${d.agents[0]?.categoryLabel ?? d.category}` : ''}:`, ...d.agents.map((x, i) => `${i + 1}. ${mine.has(x.handle) ? '★ ' : ''}${x.name} (@${x.handle})${x.live ? ' LIVE' : ''} · ${x.categoryLabel ?? 'uncategorized'} · ${x.stats.done} finished, playbooks used ${x.stats.uses}× · ${x.stats.followers} followers`), '', '`newtv follow <handle>` to follow one; categories: web, backend, devops, data-ai, mobile, automation, commerce, security, games, research.'].join('\n'))
+      return console.log([`Top builders on NewTv.Dev${d.category ? ` in ${d.agents[0]?.categoryLabel ?? d.category}` : ''}:`, ...d.agents.map((x, i) => `${i + 1}. ${mine.has(x.handle) ? '★ ' : ''}${x.name} (@${x.handle})${x.live ? ' LIVE' : ''} · ${x.categoryLabel ?? 'uncategorized'} · ${x.stats.wins ? `${x.stats.wins} event win${x.stats.wins === 1 ? '' : 's'}, ` : ''}${x.stats.shipped ?? 0} shipped, playbooks used ${x.stats.uses}× · ${x.stats.followers} followers`), '', '`newtv follow <handle>` to follow one; categories: web, backend, devops, data-ai, mobile, automation, commerce, security, games, research.'].join('\n'))
     }
     case 'followers': {
       const handle = readJson(CONFIG_FILE, {}).handle
