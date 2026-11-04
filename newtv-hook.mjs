@@ -304,7 +304,7 @@ function patchFiles(patch) {
 // attached, so it can talk it through; Cursor can't attach data to a prompt,
 // so there the answer is shown directly. Neither is broadcast.
 const CONTROLS = { off: 'off', pause: 'off', stop: 'off', end: 'off', on: 'on', resume: 'on', start: 'on', status: 'status', settings: 'status', link: 'link', private: 'private', public: 'public', join: 'join', leave: 'leave', local: 'local', help: 'help', title: 'title', rename: 'title', publish: 'publish', go: 'golive', golive: 'golive',
-  member: 'member', payouts: 'payouts', wallet: 'wallet', tips: 'tips', tip: 'tips', subs: 'subs', sub: 'subs', subscriptions: 'subs', social: 'social', links: 'social', socials: 'social', viewers: 'viewers', who: 'viewers', kick: 'kick', remove: 'kick', ban: 'ban', bans: 'bans', unban: 'unban', contact: 'contact', sponsor: 'sponsor', redact: 'redact', follow: 'follow', unfollow: 'unfollow', following: 'following', followers: 'followers', category: 'category', top: 'top', rank: 'rank', register: 'register', share: 'share', hide: 'hide', unhide: 'unhide', agents: 'agents', comments: 'comments' }
+  member: 'member', payouts: 'payouts', wallet: 'wallet', tips: 'tips', tip: 'tips', subs: 'subs', sub: 'subs', subscriptions: 'subs', social: 'social', links: 'social', socials: 'social', viewers: 'viewers', who: 'viewers', kick: 'kick', remove: 'kick', ban: 'ban', bans: 'bans', unban: 'unban', contact: 'contact', sponsor: 'sponsor', redact: 'redact', follow: 'follow', unfollow: 'unfollow', following: 'following', followers: 'followers', category: 'category', top: 'top', rank: 'rank', register: 'register', skill: 'skill', skills: 'skill', share: 'share', hide: 'hide', unhide: 'unhide', agents: 'agents', comments: 'comments' }
 const EXPLORE = new Set(['live', 'watch', 'search', 'learn'])
 const CHAT_COMMAND = /^\s*\/?newtv(?:\s+([a-z]+)\b([\s\S]*))?$/i
 const LAST_LIST = join(HOME_DIR, 'last-list.json') // what `newtv watch 2` refers to
@@ -422,6 +422,7 @@ async function controlCommand({ cmd, rest }, state) {
   if (cmd === 'event') args = rest.split(/\s+/).filter(Boolean).slice(0, 2)
   if (cmd === 'rank') args = rest.split(/\s+/).filter(Boolean).slice(0, 3)
   if (cmd === 'register') args = rest.trim() ? [rest.trim()] : []
+  if (cmd === 'skill') args = rest.trim() ? [rest.trim()] : []
   if (['contact', 'hide', 'unhide', 'sponsor', 'redact', 'follow', 'unfollow', 'category', 'top'].includes(cmd)) args = rest.trim() ? [rest.trim()] : []
   if (['member', 'payouts', 'social', 'wallet'].includes(cmd)) args = rest.split(/\s+/).filter(Boolean).slice(0, 2)
   if (['tips', 'subs'].includes(cmd)) args = rest ? [rest] : []
@@ -575,6 +576,7 @@ const HELP = [
   '  newtv follow <handle>   follow a builder (newtv unfollow, newtv following, newtv followers)',
   '  newtv top [category]    the top builders (newtv category <name>: choose yours)',
   '  newtv register "Name"   a new agent under your name (newtv rank off: out of the rankings)',
+  '  newtv skill <github>    your skill on your profile, with its install command (newtv skill remove)',
   '  newtv social github me  your links on your broadcasts: x, github, linkedin, bluesky, youtube, discord, website',
   '  newtv local on / off    keep full sessions only on this machine',
   'Your viewers',
@@ -1623,6 +1625,26 @@ async function command(cmd, args) {
       return console.log([`You follow: ${list.map((h) => `@${h}`).join(', ')}`, ...(rows.length ? ['', ...rows, '', '`newtv watch 1` to see a session\'s latest steps.'] : ['Nothing public from them yet.'])].join('\n'))
     }
     // Your category on NewTv (or let it be worked out from your sessions), and the top builders.
+    // Your skill on your profile: a public GitHub repository others can install.
+    //   newtv skill https://github.com/you/your-skill [what it does]   newtv skill remove
+    case 'skill': {
+      const { c, get } = await payoutsClient()
+      const [url, ...words] = String(args.join(' ')).trim().split(/\s+/).filter(Boolean)
+      if (!url) {
+        const me = await getJson(`/v1/agents/${c.handle}`).catch(() => null)
+        const sk = me?.agent?.skill
+        return console.log(sk ? `Your skill: ${sk.name} (${sk.url})\nOn your profile with its install command: https://newtv.dev/#/agent/${c.handle}\n\`newtv skill remove\` takes it off.` : 'No skill on your profile. Share one: `newtv skill https://github.com/you/your-skill what it does`.')
+      }
+      if (/^(remove|off|none)$/i.test(url)) {
+        const r = await get('/v1/agents/me', 'POST', { skill: null })
+        if (r.status !== 200) throw new Error(r.body?.error ?? 'Couldn\'t remove it.')
+        return console.log('Your skill is off your profile.')
+      }
+      const r = await get('/v1/agents/me', 'POST', { skill: { url, description: scrub(words.join(' ').replace(/^["']|["']$/g, ''), 140) } })
+      if (r.status !== 200) throw new Error(r.body?.error ?? 'Couldn\'t add it.')
+      const sk = r.body.agent.skill
+      return console.log(`Your skill ${sk.name} is on your profile, with its install command:\n  ${sk.install}\nhttps://newtv.dev/#/agent/${c.handle}`)
+    }
     // Take your agent out of the rankings (a test agent) or put it back; its page stays.
     case 'rank': {
       // --agent <handle>: one you registered before (newtv register keeps its token).
