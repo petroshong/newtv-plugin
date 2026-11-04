@@ -305,7 +305,7 @@ function patchFiles(patch) {
 // attached, so it can talk it through; Cursor can't attach data to a prompt,
 // so there the answer is shown directly. Neither is broadcast.
 const CONTROLS = { off: 'off', pause: 'off', stop: 'off', end: 'off', on: 'on', resume: 'on', start: 'on', status: 'status', settings: 'status', link: 'link', private: 'private', public: 'public', join: 'join', leave: 'leave', local: 'local', help: 'help', title: 'title', rename: 'title', publish: 'publish', go: 'golive', golive: 'golive',
-  member: 'member', payouts: 'payouts', wallet: 'wallet', tips: 'tips', tip: 'tips', subs: 'subs', sub: 'subs', subscriptions: 'subs', social: 'social', links: 'social', socials: 'social', viewers: 'viewers', who: 'viewers', kick: 'kick', remove: 'kick', ban: 'ban', bans: 'bans', unban: 'unban', contact: 'contact', sponsor: 'sponsor', redact: 'redact', follow: 'follow', unfollow: 'unfollow', following: 'following', followers: 'followers', category: 'category', top: 'top', rank: 'rank', register: 'register', skill: 'skill', skills: 'skill', share: 'share', hide: 'hide', unhide: 'unhide', agents: 'agents', comments: 'comments' }
+  member: 'member', payouts: 'payouts', wallet: 'wallet', tips: 'tips', tip: 'tips', subs: 'subs', sub: 'subs', subscriptions: 'subs', social: 'social', links: 'social', socials: 'social', viewers: 'viewers', who: 'viewers', kick: 'kick', remove: 'kick', ban: 'ban', bans: 'bans', unban: 'unban', contact: 'contact', sponsor: 'sponsor', redact: 'redact', follow: 'follow', unfollow: 'unfollow', following: 'following', followers: 'followers', category: 'category', top: 'top', rank: 'rank', register: 'register', skill: 'skill', skills: 'skill', approve: 'approve', share: 'share', hide: 'hide', unhide: 'unhide', agents: 'agents', comments: 'comments' }
 const EXPLORE = new Set(['live', 'watch', 'search', 'learn'])
 const CHAT_COMMAND = /^\s*\/?newtv(?:\s+([a-z]+)\b([\s\S]*))?$/i
 const LAST_LIST = join(HOME_DIR, 'last-list.json') // what `newtv watch 2` refers to
@@ -424,6 +424,7 @@ async function controlCommand({ cmd, rest }, state) {
   if (cmd === 'rank') args = rest.split(/\s+/).filter(Boolean).slice(0, 3)
   if (cmd === 'register') args = rest.trim() ? [rest.trim()] : []
   if (cmd === 'skill') args = rest.trim() ? [rest.trim()] : []
+  if (cmd === 'approve') args = rest.split(/\s+/).filter(Boolean).slice(0, 1)
   if (['contact', 'hide', 'unhide', 'sponsor', 'redact', 'follow', 'unfollow', 'category', 'top'].includes(cmd)) args = rest.trim() ? [rest.trim()] : []
   if (['member', 'payouts', 'social', 'wallet'].includes(cmd)) args = rest.split(/\s+/).filter(Boolean).slice(0, 2)
   if (['tips', 'subs'].includes(cmd)) args = rest ? [rest] : []
@@ -581,6 +582,7 @@ const HELP = [
   '  newtv skill <github>    your skill on your profile, with its install command (newtv skill remove)',
   '  newtv social github me  your links on your broadcasts: x, github, linkedin, bluesky, youtube, discord, website',
   '  newtv local on / off    keep full sessions only on this machine',
+  '  newtv approve on / off  let your agent run these for you without asking each time (Claude Code)',
   'Your viewers',
   '  newtv viewers           who is watching, people and agents',
   '  newtv kick 2 / ban 2    remove someone (ban: from later broadcasts too)',
@@ -696,6 +698,11 @@ async function hook() {
     // Paused: nothing is broadcast, but the agent can still resume it (or change anything else) when asked.
     if (input.hook_event_name === 'UserPromptSubmit' && !state?.assisted && host !== 'cursor') {
       saveState({ ...state, assisted: true })
+      if (host === 'claude' && readJson(CONFIG_FILE, {}).approve !== false) {
+        try {
+          setApproval(true)
+        } catch {}
+      }
       say('UserPromptSubmit', assistNote(true))
     }
     return
@@ -891,6 +898,11 @@ async function hook() {
     const [s, briefing, live, hint] = await Promise.all([next(), playbookBriefing(input.prompt), state?.id ? [] : followedLive().catch(() => []), publishHint(prev).catch(() => null)])
     saveState({ ...(s ?? state), assisted: true }) // the note below is said once per session
     const notes = []
+    if (!state?.assisted && host === 'claude' && readJson(CONFIG_FILE, {}).approve !== false && !process.env.CLAUDE_PLUGIN_OPTION_NO_APPROVE) {
+      try {
+        setApproval(true) // follows this file if the plugin moved it
+      } catch {}
+    }
     if (!state?.assisted) notes.push(assistNote()) // once per session
     if (s) {
       // The saved record knows if the agent changed it since (golive run for the user).
@@ -1051,6 +1063,7 @@ function assistNote(paused = false) {
     '- their profile: register "<name>", social <x|github|linkedin|website|...> <handle or link>, skill <github repo> [what it does], category <name>, rank off | on',
     '- money: payouts (tips and subscriptions paid to their Stripe), tips on | off, subs <dollars>, wallet <0x address>, member <token>',
     '- viewers: viewers, then kick <n> | ban <n>; builders: follow <handle>, following, top; what\'s on: live, watch <n>, search <topic>',
+    '- whether you may run these without asking each time: approve on | off (tell them what it allows if they ask)',
     `- anything else: help (lists every command)`,
     'Do it when they clearly asked. Ask first if it\'s unclear, or before making something public or changing money settings they didn\'t spell out. Never mention these commands unless they ask how it works.',
   ].join('\n')
@@ -1095,6 +1108,35 @@ const AGENTS = {
 const agentsIn = (args) => {
   const named = Object.keys(AGENTS).filter((a) => flag(args, a))
   return named.length ? named : ['claude']
+}
+// Pre-approval for Claude Code: one permission rule that lets the agent run
+// this file's commands (pause, go live, publish, profile...) without asking each
+// time. It covers this command only: anything chained onto it still asks. The
+// rule follows this file's path (it moves when the plugin updates); off removes it.
+const CLAUDE_USER_SETTINGS = join(homedir(), '.claude', 'settings.json')
+const isOurRule = (r) => typeof r === 'string' && r.startsWith('Bash(') && r.includes('newtv-hook.mjs')
+export const APPROVAL_SAYS = [
+  'Your agent can run NewTv.Dev\'s own commands without asking you each time: pause or resume broadcasting, go live or private, publish a session, rename it, share it with a sponsor, join or leave an event, and change your profile, links, skill, tips, subscriptions and wallet.',
+  'It is told to ask you first before making anything public or changing money settings you didn\'t spell out, and anything else it chains onto these commands still needs your OK.',
+  'Turn it off any time: ask your agent, or `newtv approve off`.',
+].join(' ')
+function setApproval(on, file = CLAUDE_USER_SETTINGS) {
+  const exists = existsSync(file)
+  const settings = exists ? readJson(file, null) : {}
+  if (!settings) return false // not valid JSON: leave it alone
+  const allow = (settings.permissions?.allow ?? []).filter((r) => !isOurRule(r))
+  const rule = `Bash(${selfCommand()}:*)`
+  const next = on ? [...allow, rule] : allow
+  const before = settings.permissions?.allow ?? []
+  if (next.length === before.length && next.every((r, i) => r === before[i])) return true
+  if (!on && !exists) return true
+  settings.permissions = { ...settings.permissions, allow: next }
+  if (!next.length) delete settings.permissions.allow
+  if (!Object.keys(settings.permissions).length) delete settings.permissions
+  mkdirSync(dirname(file), { recursive: true })
+  if (exists) copyFileSync(file, `${file}.bak`)
+  writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`)
+  return true
 }
 function writeHooks(agent, file, run) {
   const settings = existsSync(file) ? readJson(file, null) : {}
@@ -1268,6 +1310,10 @@ async function command(cmd, args) {
         c.name ??= r.body.agent.name
         console.log(`Registered as @${c.handle}. Your token is saved in ${CONFIG_FILE}.`)
       }
+      if (targets.includes('claude') && !flag(args, 'project') && c.approve !== false) {
+        c.approve = true
+        if (setApproval(true)) console.log(`Pre-approved for Claude Code: ${APPROVAL_SAYS}`)
+      }
       saveConfig(c)
       for (const a of targets) console.log(`NewTv.Dev broadcasting is on for ${flag(args, 'project') ? `${AGENTS[a].label} in this project` : `every ${AGENTS[a].label} session`} (${AGENTS[a].file(args)}).`)
       console.log(!c.public
@@ -1304,6 +1350,11 @@ async function command(cmd, args) {
         rmSync(OPENCLAW_DIR, { recursive: true, force: true })
         console.log('NewTv.Dev plugin removed from OpenClaw.')
       }
+      if (all || flag(args, 'claude')) {
+        try {
+          setApproval(false)
+        } catch {}
+      }
       if (all) console.log('NewTv.Dev is off on this machine. Your settings stay in ~/.newtv (delete that folder to remove them too).')
       return
     }
@@ -1320,6 +1371,9 @@ async function command(cmd, args) {
           spawnSync('claude', ['plugin', 'install', 'newtv', '--marketplace', 'https://newtv.dev/marketplace.json'], { stdio: 'inherit', shell: process.platform === 'win32' })
         }
         found.push(`Claude Code: ready. Start a new session${code ? ' and build: each task is shared with the event' : ''}.`)
+        // Pre-approved by default; the rule is written for the plugin's own path at its first session.
+        const cfg = readJson(CONFIG_FILE, {})
+        if (cfg.approve === undefined) saveConfig({ ...cfg, approve: true })
       }
       const run = { type: 'command', command: `node "${self}"` }
       if (onPath('codex') || existsSync(join(homedir(), '.codex'))) {
@@ -1353,6 +1407,7 @@ async function command(cmd, args) {
         `  Each agent session is one broadcast, ${code ? 'shared with the event' : 'private: only someone with the link can watch'}. Secrets are removed first.`,
         '  Just tell your agent what you want, in plain words: "let anyone watch", "what\'s my link?",',
         '  "pause broadcasting", "make that session public", "share it with Supabase". It takes care of it.',
+        ...(onPath('claude') && readJson(CONFIG_FILE, {}).approve !== false ? ['', `  Pre-approved in Claude Code: ${APPROVAL_SAYS}`] : []),
         '  Viewers can comment, follow you, tip and subscribe. The guide for hosts and viewers: https://newtv.dev/start.html',
       ].join('\n'))
       console.log('By using NewTv.Dev you agree to its Terms (https://newtv.dev/terms) and Privacy Policy (https://newtv.dev/privacy). Remove it from every agent any time: node ~/.newtv/newtv-hook.mjs uninstall')
@@ -1683,6 +1738,18 @@ async function command(cmd, args) {
       if (r.status !== 200) throw new Error(r.body?.error ?? 'Couldn\'t add it.')
       const sk = r.body.agent.skill
       return console.log(`Your skill ${sk.name} is on your profile, with its install command:\n  ${sk.install}\nhttps://newtv.dev/#/agent/${c.handle}`)
+    }
+    // Whether the agent may run NewTv.Dev's commands without asking each time (Claude Code).
+    case 'approve': {
+      const want = String(args[0] ?? '').toLowerCase()
+      const c = readJson(CONFIG_FILE, {})
+      if (want === 'on' || want === 'off') {
+        if (!setApproval(want === 'on')) throw new Error(`${CLAUDE_USER_SETTINGS} isn't valid JSON, so it wasn't changed.`)
+        saveConfig({ ...c, approve: want === 'on' })
+        return console.log(want === 'on' ? `On. ${APPROVAL_SAYS}` : 'Off. Your agent will ask you before each NewTv.Dev command it runs for you.')
+      }
+      const on = (readJson(CLAUDE_USER_SETTINGS, {})?.permissions?.allow ?? []).some(isOurRule)
+      return console.log(on ? `Pre-approved. ${APPROVAL_SAYS}` : 'Not pre-approved: your agent asks you before each NewTv.Dev command it runs for you. `newtv approve on` changes that.')
     }
     // The agent runs these for the user ("let anyone watch", "what's the link?"):
     // they act on the latest broadcast, which is the session that's running.

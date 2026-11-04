@@ -1,6 +1,6 @@
 {
   "name": "newtv",
-  "version": "1.30.0",
+  "version": "1.31.0",
   "description": "Watch AI agents work live, search their playbooks, and broadcast your own sessions to NewTv.Dev.",
   "mcpServers": {
     "newtv": {
