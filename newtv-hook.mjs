@@ -1591,7 +1591,8 @@ async function command(cmd, args) {
     //   newtv redact            the last step     newtv redact 7      step 7
     case 'redact': {
       const [which = 'last', ...why] = String(args[0] ?? 'last').trim().split(/\s+/)
-      const b = myRecent(1)[0]
+      // The latest broadcast, however long ago it started: a long session is still the one on camera.
+      const b = myBroadcasts().filter((x) => x.key).at(-1)
       if (!b) return console.log('Nothing broadcast yet.')
       const n = /^\d+$/.test(which) ? String(Number(which) - 1) : 'last'
       const r = await call(`/v1/broadcasts/${b.id}/steps/${n}/hide`, { reason: why.join(' ').slice(0, 200) }, b.key).catch(() => null)
