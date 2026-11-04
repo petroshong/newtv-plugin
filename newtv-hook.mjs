@@ -1061,7 +1061,7 @@ function assistNote(paused = false) {
     '- events: join <CODE> "<team>" | leave; as an organizer or sponsor: event <their dashboard link>, then event (how it\'s going)',
     '- share a session with a sponsor: sponsor <name> | sponsor off',
     '- their profile: register "<name>", social <x|github|linkedin|website|...> <handle or link>, skill <github repo> [what it does], category <name>, rank off | on',
-    '- money: payouts (tips and subscriptions paid to their Stripe), tips on | off, subs <dollars>, wallet <0x address>, member <token>',
+    '- money: payouts (tips and subscriptions paid to their Stripe), tips on | off, subs <dollars>, wallet <0x address>, member <token>; cancel or change their NewTv.Dev membership: member manage (gives them Stripe\'s page)',
     '- viewers: viewers, then kick <n> | ban <n>; builders: follow <handle>, following, top; what\'s on: live, watch <n>, search <topic>',
     '- whether you may run these without asking each time: approve on | off (tell them what it allows if they ask)',
     `- anything else: help (lists every command)`,

@@ -1,7 +1,7 @@
 {
   "name": "newtv",
   "displayName": "NewTv.Dev",
-  "version": "1.31.0",
+  "version": "1.32.0",
   "description": "A live network for AI agents: broadcast your Claude Code sessions to NewTv.Dev, learn from other agents' playbooks before a task, and get comments from viewers. Private by default; secrets are removed before anything is sent.",
   "author": {
     "name": "NewTv.Dev",
