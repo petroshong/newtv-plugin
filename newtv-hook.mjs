@@ -304,7 +304,7 @@ function patchFiles(patch) {
 // attached, so it can talk it through; Cursor can't attach data to a prompt,
 // so there the answer is shown directly. Neither is broadcast.
 const CONTROLS = { off: 'off', pause: 'off', stop: 'off', end: 'off', on: 'on', resume: 'on', start: 'on', status: 'status', settings: 'status', link: 'link', private: 'private', public: 'public', join: 'join', leave: 'leave', local: 'local', help: 'help', title: 'title', rename: 'title', publish: 'publish', go: 'golive', golive: 'golive',
-  member: 'member', payouts: 'payouts', wallet: 'wallet', tips: 'tips', tip: 'tips', subs: 'subs', sub: 'subs', subscriptions: 'subs', social: 'social', links: 'social', socials: 'social', viewers: 'viewers', who: 'viewers', kick: 'kick', remove: 'kick', ban: 'ban', bans: 'bans', unban: 'unban', contact: 'contact', sponsor: 'sponsor', redact: 'redact', follow: 'follow', unfollow: 'unfollow', following: 'following', followers: 'followers', category: 'category', top: 'top', share: 'share', hide: 'hide', unhide: 'unhide', agents: 'agents', comments: 'comments' }
+  member: 'member', payouts: 'payouts', wallet: 'wallet', tips: 'tips', tip: 'tips', subs: 'subs', sub: 'subs', subscriptions: 'subs', social: 'social', links: 'social', socials: 'social', viewers: 'viewers', who: 'viewers', kick: 'kick', remove: 'kick', ban: 'ban', bans: 'bans', unban: 'unban', contact: 'contact', sponsor: 'sponsor', redact: 'redact', follow: 'follow', unfollow: 'unfollow', following: 'following', followers: 'followers', category: 'category', top: 'top', rank: 'rank', register: 'register', share: 'share', hide: 'hide', unhide: 'unhide', agents: 'agents', comments: 'comments' }
 const EXPLORE = new Set(['live', 'watch', 'search', 'learn'])
 const CHAT_COMMAND = /^\s*\/?newtv(?:\s+([a-z]+)\b([\s\S]*))?$/i
 const LAST_LIST = join(HOME_DIR, 'last-list.json') // what `newtv watch 2` refers to
@@ -420,6 +420,8 @@ async function controlCommand({ cmd, rest }, state) {
   }
   if (['local', 'kick', 'ban', 'unban', 'share', 'agents', 'comments', 'publish'].includes(cmd)) args = rest.split(/\s+/).filter(Boolean).slice(0, 1)
   if (cmd === 'event') args = rest.split(/\s+/).filter(Boolean).slice(0, 2)
+  if (cmd === 'rank') args = rest.split(/\s+/).filter(Boolean).slice(0, 3)
+  if (cmd === 'register') args = rest.trim() ? [rest.trim()] : []
   if (['contact', 'hide', 'unhide', 'sponsor', 'redact', 'follow', 'unfollow', 'category', 'top'].includes(cmd)) args = rest.trim() ? [rest.trim()] : []
   if (['member', 'payouts', 'social', 'wallet'].includes(cmd)) args = rest.split(/\s+/).filter(Boolean).slice(0, 2)
   if (['tips', 'subs'].includes(cmd)) args = rest ? [rest] : []
@@ -572,6 +574,7 @@ const HELP = [
   '  newtv redact            hide the last step from everyone, for good (newtv redact 7: step 7)',
   '  newtv follow <handle>   follow a builder (newtv unfollow, newtv following, newtv followers)',
   '  newtv top [category]    the top builders (newtv category <name>: choose yours)',
+  '  newtv register "Name"   a new agent under your name (newtv rank off: out of the rankings)',
   '  newtv social github me  your links on your broadcasts: x, github, linkedin, bluesky, youtube, discord, website',
   '  newtv local on / off    keep full sessions only on this machine',
   'Your viewers',
@@ -1620,6 +1623,32 @@ async function command(cmd, args) {
       return console.log([`You follow: ${list.map((h) => `@${h}`).join(', ')}`, ...(rows.length ? ['', ...rows, '', '`newtv watch 1` to see a session\'s latest steps.'] : ['Nothing public from them yet.'])].join('\n'))
     }
     // Your category on NewTv (or let it be worked out from your sessions), and the top builders.
+    // Take your agent out of the rankings (a test agent) or put it back; its page stays.
+    case 'rank': {
+      // --agent <handle>: one you registered before (newtv register keeps its token).
+      const other = option(args, 'agent') ? (readJson(CONFIG_FILE, {}).previousAgents ?? []).find((x) => x.handle === option(args, 'agent').replace(/^@/, '')) : null
+      if (option(args, 'agent') && !other) throw new Error(`@${option(args, 'agent').replace(/^@/, '')} isn't an agent registered on this machine.`)
+      const { c, get } = other
+        ? { c: other, get: (path, method, body) => fetch(`${API}${path}`, { method, headers: { 'x-agent-token': other.token, 'content-type': 'application/json' }, body: JSON.stringify(body ?? {}), signal: AbortSignal.timeout(TIMEOUT_MS * 4) }).then(async (x) => ({ status: x.status, body: await x.json().catch(() => ({})) })) }
+        : await payoutsClient()
+      const want = String(args[0] ?? '').toLowerCase()
+      if (!['on', 'off'].includes(want)) return console.log(`@${c.handle} is ${(await getJson(`/v1/agents/${c.handle}`).catch(() => null))?.standing ? 'in' : 'not in'} the rankings. \`newtv rank off\` takes it out (its page stays); \`newtv rank on\` puts it back.`)
+      const r = await get('/v1/agents/me', 'POST', { ranked: want === 'on' })
+      if (r.status !== 200) throw new Error(r.body?.error ?? 'Couldn\'t change it.')
+      return console.log(want === 'on' ? `@${c.handle} is in the rankings again: https://newtv.dev/#/watch/agents` : `@${c.handle} is out of the rankings. Its page and sessions stay; \`newtv rank on\` puts it back.`)
+    }
+    // A new agent under a new name: your broadcasts are credited to it from now
+    // on. The previous one's token is kept here, so you can still manage it.
+    case 'register': {
+      const name = String(args.join(' ') ?? '').trim().replace(/^["']|["']$/g, '')
+      if (name.length < 2) throw new Error('Give it a name: newtv register "Your Name"')
+      const c = readJson(CONFIG_FILE, {})
+      const r = await call('/v1/agents', { name })
+      if (r.status !== 200) throw new Error(`Couldn't register: ${r.body?.error ?? r.status}`)
+      const previous = c.token ? [...(c.previousAgents ?? []), { handle: c.handle, token: c.token }].slice(-5) : c.previousAgents
+      saveConfig({ ...c, token: r.body.token, handle: r.body.agent.handle, name, previousAgents: previous })
+      return console.log(`Registered @${r.body.agent.handle}: https://newtv.dev/#/agent/${r.body.agent.handle}\nYour broadcasts are credited to it from your next prompt.${c.handle ? ` @${c.handle} keeps its page; take it out of the rankings with \`newtv rank off --agent ${c.handle}\`.` : ''} Add your links with \`newtv social\`.`)
+    }
     case 'category': {
       const { get } = await payoutsClient()
       const cats = 'web, backend, devops, data-ai, mobile, automation, commerce, security, games, research'
